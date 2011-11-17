@@ -11,7 +11,11 @@ if len(sys.argv) != 2:
 	sys.exit(1)
 
 tilingBase = sys.argv[1]
-print "using tiling base path: " + tilingBase
+if os.path.exists(tilingBase):
+	print "using tiling base path: " + tilingBase
+else:
+	print "could not find tiling base path: " + tilingBase
+	sys.exit(1)
 
 # Open info file with folders to look in
 infoFiles = []
