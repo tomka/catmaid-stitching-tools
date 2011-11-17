@@ -77,8 +77,10 @@ for infoFile in infoFiles:
 			xRes = str(xResNr)
 			resStr = "resolution: " + "(" + xRes + "," + xRes + "," + xRes + ")"
 			print resStr
+	# ask for a name
+	name = raw_input("Name for this data: ")
 	# remember results
-	outputInfos[outputDir] = dimStr + "\n" + resStr
+	outputInfos[outputDir] = dimStr + "\n" + resStr + "\n" + "name: "+ name
 
 # write out info.yml
 outputFile = "info.yml"
