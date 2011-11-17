@@ -1,0 +1,329 @@
+import ij.*;
+import ij.io.*;
+import ij.process.*;
+
+import loci.plugins.util.*;
+import loci.formats.*;
+import loci.formats.meta.*;
+import ome.xml.model.primitives.PositiveFloat;
+
+import mpicbg.ij.integral.*;
+
+int tileSize = 256;
+int thumbnailSize = 192;
+//int numScaleLevels = -1; // ...compute from image height
+int numScaleLevels = 4;
+String overviewName = "small";
+
+
+
+ImagePlus openImage( pathName )
+{
+	ImageProcessorReader r = new ImageProcessorReader( new ChannelSeparator( LociPrefs.makeImageReader() ) );
+	MetadataStore store = MetadataTools.createOMEXMLMetadata();
+	r.setMetadataStore( store );
+	try
+	{
+		r.setId( pathName );
+		MetadataRetrieve retrieve = MetadataTools.asRetrieve( r.getMetadataStore() );
+
+		PositiveFloat pw = retrieve.getPixelsPhysicalSizeX( 0 );
+		pw = pw == null ? new PositiveFloat( 1.0 ) : pw;
+		PositiveFloat ph = retrieve.getPixelsPhysicalSizeY( 0 );
+		ph = ph == null ? new PositiveFloat( 1.0 ) : ph;
+		PositiveFloat pd = retrieve.getPixelsPhysicalSizeZ( 0 );
+		pd = pd == null ? new PositiveFloat( 1.0 ) : pd;
+		Double pt = retrieve.getPixelsTimeIncrement( 0 );
+		pt = pt == null ? new Double( 1.0 ) : pt;
+		
+		n = r.getImageCount();
+		w = r.getSizeX();
+		h = r.getSizeY();
+		l = r.getSizeT();
+		d = r.getSizeZ();
+		s = r.getSizeC();
+		IJ.log("Reading image with " + n + " planes, a size of " + w + "x" + h +
+			"x" + d + ", " + l + " time point(s) and " + s + " color channels");
+
+		stack = new ImageStack( w, h );
+		lookupTable = new byte[ r.getSizeC() ][][];
+		for ( int t = 0; t < l; ++t )
+			for ( int z = 0; z < d; ++z )
+				for ( int c = 0; c < s; ++c )
+				{
+					i = t * d * s + z * s + c;
+					ip = r.openProcessors( i )[ 0 ];
+					stack.addSlice( "" + ( i + 1 ), ip );
+					ci = r.getZCTCoords( i )[ 1 ];
+					lookupTable[ ci ] = r.get8BitLookupTable();
+				}
+		imp = new ImagePlus( pathName, stack );
+		calibration = imp.getCalibration();
+		calibration.pixelWidth = pw.getValue();
+		calibration.pixelHeight = ph.getValue();
+		calibration.pixelDepth = pd.getValue();
+		calibration.frameInterval = pt.doubleValue();
+		calibration.setUnit( "um" );
+		imp.setDimensions( r.getSizeC(), r.getSizeZ(), r.getSizeT() );
+		imp.setOpenAsHyperStack( true );
+		cimp = new CompositeImage( imp );
+		cimp.setMode( CompositeImage.COMPOSITE );
+		return cimp;
+	}
+	catch ( FormatException exc )
+	{
+		IJ.error("FormatException: Sorry, an error occurred: " + exc.getMessage());
+	}
+	catch ( IOException exc )
+	{
+		IJ.error("IOException: Sorry, an error occurred: " + exc.getMessage());
+	}
+	return null;
+}
+
+/**
+ * crop a tile from a ColorProcessor.
+ *
+ * @param tileWidth    width of a tile
+ * @param tileHieght   height of a tile
+ * @param tileIndexX   grid index of the tile to crop
+ * @param tileIndexY   grid index of the tile to crop
+ */
+ColorProcessor getTile( ColorProcessor cp, int tileWidth, int tileHeight, int tileIndexX, int tileIndexY )
+{
+	int x = tileWidth * tileIndexX;
+	int y = tileHeight * tileIndexY;
+	cp.setRoi( x, y, tileWidth, tileHeight );
+	ColorProcessor cpTile = cp.crop();
+	return cpTile;
+}
+
+/**
+ * choose the number of scale levels required to fit the
+ * image height into 2*tile_size at the highest level.
+ */
+int getNumScaleLevels( int height, int tileSize )
+{
+	double s = Math.log( (double)height / (double)tileSize ) / Math.log( 2 );
+	if ( s < 1 )
+		return 1;
+	else if ( (int) s == s )
+		return (int) s;
+	else
+		return (int) s + 1;
+}
+
+void createTiles() {
+	int numSlices = imp.getNSlices();
+	int tileWidth = tileSize;
+	int tileHeight = tileSize;
+	if ( numScaleLevels == -1 )
+		numScaleLevels = getNumScaleLevels( imp.getHeight(), tileSize );
+
+	IJ.log( "computing tiles for "+numScaleLevels+" scale levels, "+numSlices+" slices" );
+
+	int lastStep = 0;
+	for ( int sliceIndex = 0; sliceIndex < numSlices; ++sliceIndex )
+	{
+		percent = (int) (((sliceIndex + 1) / (float) numSlices) * 100.0 + 0.5);
+		if (percent >= lastStep) {
+			IJ.log(lastStep + "% completed");
+			lastStep += 10;
+		}
+		// expect a hyper stack and set slice accordingly"
+		imp.setPosition(1, sliceIndex+1, 1);
+		imp.updateImage();
+		ColorProcessor cpSlice = new ColorProcessor( imp.getImage() );
+		cpSliceScale = new Scale( cpSlice );
+
+		for ( int scaleLevel = 0; scaleLevel < numScaleLevels; ++scaleLevel )
+		{
+			int width = imp.getWidth() / Math.pow( 2, scaleLevel );
+			int height = imp.getHeight() / Math.pow( 2, scaleLevel );
+			ColorProcessor cp = cpSliceScale.scale( width, height );
+
+			int cols = ( width / tileWidth );
+			if ( width > cols * tileWidth )
+				++cols;
+			int rows = ( height / tileHeight );
+			if ( height > rows * tileHeight )
+				++rows;
+			
+			sliceDirName = stackDirName + "/" + sliceIndex;
+
+			// create tiles
+			for ( int tileIndexY = 0; tileIndexY < rows; ++tileIndexY )
+			{
+				for ( int tileIndexX = 0; tileIndexX < cols; ++tileIndexX )
+				{
+					cpTile = getTile( cp, tileWidth, tileHeight, tileIndexX, tileIndexY );
+					ip = new ImagePlus( "" + tileIndexY + ", " + tileIndexX, cpTile );
+					//tileDirName = sliceDirName + "/" + scaleLevel + "/" + tileIndexY;
+					//tileFileName = tileDirName + "/" + tileIndexX + ".jpg";
+					tileDirName = sliceDirName + "/";
+					tileFileName = tileDirName + tileIndexY + "_" + tileIndexX + "_" + scaleLevel + ".jpg";
+					// IJ.log( "writing " + tileFileName );
+					new File( tileDirName ).mkdirs();
+					saver = new FileSaver( ip );
+					saver.saveAsJpeg( tileFileName );
+				}
+			}
+
+			// create overview image
+			int width = imp.getWidth();
+			int height = imp.getHeight();
+			if ( width > height )
+			{
+				height = (height * thumbnailSize) / width;
+				width = thumbnailSize;
+			}
+			else
+			{
+				width = (width * thumbnailSize) / height;
+				height = thumbnailSize;
+			}
+			cpOverview = cpSliceScale.scale( width, height );
+			ip = new ImagePlus( "overview", cpOverview );
+			overviewFileName = sliceDirName + "/" + overviewName + ".jpg";
+			saver = new FileSaver( ip );
+			saver.saveAsJpeg( overviewFileName );
+		}
+
+	}
+}
+
+void tileSingleImage(imgFileName) {
+	imgFile = new File( imgFileName );
+	if ( ! imgFile.exists() || ! imgFile.isFile() )
+	{
+		IJ.log( "File `" + imgFileName + "' not found." );
+		return;
+	}
+	imp = openImage ( imgFileName );
+	if ( imp == null )
+	{
+		IJ.log( "File `" + imgFileName + "' could not be opened." );
+		return;
+	}
+	createTiles();
+}
+
+ArrayList preProcess(imgFileName) {
+	// remove the extension from the file name
+	imgFileNameBase = imgFileName.substring(0, imgFileName.lastIndexOf('.'));
+	//imgName = new File(imgFileName);
+	//IJ.log("Opening image " + imgName);
+	//imp = IJ.openImage( imgFileName );
+	//if ( imp == null )
+	//{
+	//	IJ.log( "File `" + imgFileName + "' could not be opened." );
+	//	return false;
+	//}
+	compositeName = imgFileNameBase + "-composite.tif";
+	ch1Name = imgFileNameBase + "-ch1.tif";
+	ch2Name = imgFileNameBase + "-ch2.tif";
+	ch3Name = imgFileNameBase + "-ch3.tif";
+	ch4Name = imgFileNameBase + "-ch4.tif";
+
+	IJ.log("Preprocessing image " + imgFileName);
+	macro = "setBatchMode(true);\n"
+		+"open(\"" + imgFileName + "\");\n"
+		+"Stack.setChannel(1);\n"
+		+"setMinAndMax(0, 4095);\n"
+		+"run(\"Blue\");\n"
+		+"Stack.setChannel(2);\n"
+		+"setMinAndMax(0, 4095);\n"
+		+"run(\"Green\");\n"
+		+"Stack.setChannel(3);\n"
+		+"setMinAndMax(0, 4095);\n"
+		+"run(\"Magenta\");\n"
+		+"Stack.setChannel(4);\n"
+		+"setMinAndMax(0, 4095);\n"
+		+"run(\"Grays\");\n"
+		+"Stack.setDisplayMode(\"composite\");\n"
+		+"run(\"Stack to RGB\", \"slices keep\");\n"
+		+"saveAs(\"Tiff\", \"" + compositeName + "\");\n"
+		+"close();\n"
+		+"run(\"Split Channels\");\n"
+		+"run(\"8-bit\");\n"
+		+"run(\"Grays\");\n"
+		+"saveAs(\"Tiff\", \"" + ch4Name + "\");\n"
+		+"close();\n"
+		+"run(\"8-bit\");\n"
+		+"run(\"Grays\");\n"
+		+"saveAs(\"Tiff\", \"" + ch3Name + "\");\n"
+		+"close();\n"
+		+"run(\"8-bit\");\n"
+		+"run(\"Grays\");\n"
+		+"saveAs(\"Tiff\", \"" + ch2Name + "\");\n"
+		+"close();\n"
+		+"run(\"8-bit\");\n"
+		+"run(\"Grays\");\n"
+		+"saveAs(\"Tiff\", \"" + ch1Name + "\");\n"
+		+"close();";
+
+	output = IJ.runMacro(macro);
+	IJ.log("Output of macro: " + output);
+	
+	returnList = new ArrayList();
+	returnList.add(compositeName);
+	returnList.add(ch1Name);
+	returnList.add(ch2Name);
+	returnList.add(ch3Name);
+	returnList.add(ch4Name);
+
+	return returnList;
+}
+
+////////////// main ////////////////
+
+ImagePlus imp = null;
+if ( bsh.args.length > 1 ) {
+	stackDirName = "./tile_output/";
+	if ( bsh.args.length > 1 )
+		stackDirName = bsh.args[ 1 ];
+	imgFileName = bsh.args[ 0 ];
+	tileSingleImage( imgFileName );
+} else {
+	f = new File("totile.txt");
+	if (f.exists()) {
+		try {
+			rawImages = new ArrayList();
+			// look for a list of images to work on
+			fstream = new FileInputStream(f);
+			in = new DataInputStream(fstream);
+			br = new BufferedReader(new InputStreamReader(in));
+			String strLine;
+			while ((strLine = br.readLine()) != null) {
+				imgFile = new File(strLine);
+				if (imgFile.exists()) {
+					IJ.log("found file " + strLine);
+					rawImages.add(strLine);
+				} else {
+					IJ.log("could not find file " + strLine);
+				}
+			}
+			in.close();
+			// Open every image, reset the dynamic range,
+			// create a composite and all single channel images,
+			// save them and then tile them
+			for(ri : rawImages) {
+				readyImages = preProcess(ri);
+				for (i : readyImages) {
+					imgFile = new File(i);
+					imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
+					stackDirName = "./tile_output/" + imgBaseName + "/";
+					imgDir = new File(stackDirName);
+					imgDir.mkdirs();
+					tileSingleImage(i);
+					// finally remove the image
+					imgFile.delete();
+				}
+			}
+		} catch (e) {
+			System.err.println("Error: " + e.getMessage());
+		}
+	}
+}
+
+
