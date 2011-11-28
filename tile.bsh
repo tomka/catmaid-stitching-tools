@@ -14,8 +14,9 @@ int thumbnailSize = 192;
 //int numScaleLevels = -1; // ...compute from image height
 int numScaleLevels = 4;
 String overviewName = "small";
-
-
+float unitConvFactor = 1000.0;
+int maxValue = 4095;
+boolean useGeneratedInfo = false;
 
 ImagePlus openImage( pathName )
 {
@@ -208,71 +209,95 @@ void tileSingleImage(imgFileName) {
 	createTiles();
 }
 
-ArrayList preProcess(imgFileName) {
+String getChannelName(num) {
+	return "-ch" + num + ".tif";
+}
+
+public class ImageInfo {
+	public ArrayList images;
+	public String info;
+
+	public ImageInfo(ArrayList list, String info) {
+		this.images = list;
+		this.info = info;
+	}
+
+	public ImageInfo(ArrayList list) {
+		this.images = list;
+		this.info = "None";
+	}
+}
+
+ImageInfo preProcess(imgFileName, numChannels, colors) {
+	returnList = new ArrayList();
+	// check if enough colors are available
+	if (numChannels > colors.size()) {
+		IJ.log("Got only " + colors.length() + " colors, but would need " + numChannels);
+		return null;
+	}
 	// remove the extension from the file name
 	imgFileNameBase = imgFileName.substring(0, imgFileName.lastIndexOf('.'));
-	//imgName = new File(imgFileName);
-	//IJ.log("Opening image " + imgName);
-	//imp = IJ.openImage( imgFileName );
-	//if ( imp == null )
-	//{
-	//	IJ.log( "File `" + imgFileName + "' could not be opened." );
-	//	return false;
-	//}
+	// create names for different channels
 	compositeName = imgFileNameBase + "-composite.tif";
-	ch1Name = imgFileNameBase + "-ch1.tif";
-	ch2Name = imgFileNameBase + "-ch2.tif";
-	ch3Name = imgFileNameBase + "-ch3.tif";
-	ch4Name = imgFileNameBase + "-ch4.tif";
 
 	IJ.log("Preprocessing image " + imgFileName);
 	macro = "setBatchMode(true);\n"
-		+"open(\"" + imgFileName + "\");\n"
-		+"Stack.setChannel(1);\n"
-		+"setMinAndMax(0, 4095);\n"
-		+"run(\"Blue\");\n"
-		+"Stack.setChannel(2);\n"
-		+"setMinAndMax(0, 4095);\n"
-		+"run(\"Green\");\n"
-		+"Stack.setChannel(3);\n"
-		+"setMinAndMax(0, 4095);\n"
-		+"run(\"Magenta\");\n"
-		+"Stack.setChannel(4);\n"
-		+"setMinAndMax(0, 4095);\n"
-		+"run(\"Grays\");\n"
-		+"Stack.setDisplayMode(\"composite\");\n"
+		+"run(\"Bio-Formats\", \"open=[" + imgFileName + "] view=Hyperstack stack_order=XYCZT display_metadata=false\");\n"
+		+"Stack.setDisplayMode(\"color\");\n";
+		//+"open(\"" + imgFileName + "\");\n";
+	if (useGeneratedInfo) {
+		// get dimension and resolution info
+		macro += "Stack.getDimensions(width, height, channels, slices, frames);\n"
+			+"getPixelSize(unit, pw, ph, pd);\n"
+			+"factor = " + unitConvFactor + ";\n"
+			+"dimStr = \"dimension: (\" + width + \",\" + height + \",\" + slices + \")\";\n"
+			+"resStr = \"resolution: (\" + pw*factor + \",\" + ph*factor + \",\" + pd*factor + \")\";\n"
+			+"infoStr = dimStr + \"\\n\" + resStr + \"\\n\";\n";
+	}
+	// prepare channels
+	for (int i=0; i<numChannels; ++i) {
+		ch = i + 1;
+		macro += "Stack.setChannel(" + ch  + ");\n"
+			+"setMinAndMax(0, " + maxValue + ");\n"
+			+"run(\"" + colors.get(i) + "\");\n";
+	}
+	// create composite
+	macro += "Stack.setDisplayMode(\"composite\");\n"
 		+"run(\"Stack to RGB\", \"slices keep\");\n"
 		+"saveAs(\"Tiff\", \"" + compositeName + "\");\n"
 		+"close();\n"
-		+"run(\"Split Channels\");\n"
-		+"run(\"8-bit\");\n"
-		+"run(\"Grays\");\n"
-		+"saveAs(\"Tiff\", \"" + ch4Name + "\");\n"
-		+"close();\n"
-		+"run(\"8-bit\");\n"
-		+"run(\"Grays\");\n"
-		+"saveAs(\"Tiff\", \"" + ch3Name + "\");\n"
-		+"close();\n"
-		+"run(\"8-bit\");\n"
-		+"run(\"Grays\");\n"
-		+"saveAs(\"Tiff\", \"" + ch2Name + "\");\n"
-		+"close();\n"
-		+"run(\"8-bit\");\n"
-		+"run(\"Grays\");\n"
-		+"saveAs(\"Tiff\", \"" + ch1Name + "\");\n"
-		+"close();";
+		+"run(\"Split Channels\");\n";
+	returnList.add(compositeName);
+	// create single channels
+	for (int i=0; i<numChannels; ++i) {
+		// save the channels in reverse
+		ch = numChannels - i;
+		chName = imgFileNameBase + getChannelName(ch);
+		macro += "run(\"8-bit\");\n"
+			+"run(\"Grays\");\n"
+			+"saveAs(\"Tiff\", \"" + chName + "\");\n"
+			+"close();\n";
+		returnList.add(chName);
+	}
+	if (useGeneratedInfo)
+		macro += "return infoStr;\n";
 
 	output = IJ.runMacro(macro);
-	IJ.log("Output of macro: " + output);
-	
-	returnList = new ArrayList();
-	returnList.add(compositeName);
-	returnList.add(ch1Name);
-	returnList.add(ch2Name);
-	returnList.add(ch3Name);
-	returnList.add(ch4Name);
+	if (useGeneratedInfo) {
+		IJ.log("Output of macro: " + output);
+		return new ImageInfo(returnList, output);
+	} else {
+		return new ImageInfo(returnList);
+	}
+}
 
-	return returnList;
+public class NamedImage {
+	String path;
+	String name;
+	public NamedImage(String path, String name) {
+		this.path = path;
+		this.name = name;
+	}
 }
 
 ////////////// main ////////////////
@@ -285,6 +310,54 @@ if ( bsh.args.length > 1 ) {
 	imgFileName = bsh.args[ 0 ];
 	tileSingleImage( imgFileName );
 } else {
+	numChannels = 4;
+	useGeneratedInfo = true;
+	maxValue = 4095;
+	IJ.log("Tiling a " + numChannels + " channel image with max. value " + maxValue);
+	if (useGeneratedInfo)
+		IJ.log("Will generate info.yml from file data");
+	// look for colors
+	colors = new ArrayList();
+	cf = new File("colors.txt");
+	if (cf.exists()) {
+		// read in color definitions from file
+		fstream = new FileInputStream(cf);
+		in = new DataInputStream(fstream);
+		br = new BufferedReader(new InputStreamReader(in));
+		String strLine;
+		while ((strLine = br.readLine()) != null) {
+			colors.add(strLine);
+		}
+		in.close();
+		IJ.log("Using colors from colors.txt file");
+	} else {
+		// add default colors if file was not found
+		colors.add("Blue");
+		colors.add("Green");
+		colors.add("Magenta");
+		colors.add("Grays");
+		IJ.log("Using default colors");
+	}
+	// look for names
+	names = new ArrayList();
+	if (useGeneratedInfo) {
+		nf = new File("names.txt");
+		if (nf.exists()) {
+			// read in color definitions from file
+			fstream = new FileInputStream(nf);
+			in = new DataInputStream(fstream);
+			br = new BufferedReader(new InputStreamReader(in));
+			String strLine;
+			while ((strLine = br.readLine()) != null) {
+				names.add(strLine);
+			}
+			in.close();
+		} else {
+			IJ.log("No name file found (names.txt)");
+			return;
+		}
+	}
+	// look for files to tile
 	f = new File("totile.txt");
 	if (f.exists()) {
 		try {
@@ -295,6 +368,10 @@ if ( bsh.args.length > 1 ) {
 			br = new BufferedReader(new InputStreamReader(in));
 			String strLine;
 			while ((strLine = br.readLine()) != null) {
+				// skip comments (lines starting with #)
+				if (strLine.trim().startsWith("#"))
+					continue;
+				// try to treat line as file path
 				imgFile = new File(strLine);
 				if (imgFile.exists()) {
 					IJ.log("found file " + strLine);
@@ -304,26 +381,79 @@ if ( bsh.args.length > 1 ) {
 				}
 			}
 			in.close();
+			namedImages = new ArrayList();
+			if (useGeneratedInfo) {
+				// check if every file has a name
+				if (rawImages.size() != names.size()) {
+					IJ.log("The number of names differs from the number of files");
+					return;
+				}
+				for (i=0; i<rawImages.size(); ++i) {
+					namedImages.add(new NamedImage(rawImages.get(i), names.get(i)));
+				}
+			} else {
+				for (i=0; i<rawImages.size(); ++i) {
+					namedImages.add(new NamedImage(rawImages.get(i), "No Name"));
+				}
+			}
 			// Open every image, reset the dynamic range,
 			// create a composite and all single channel images,
 			// save them and then tile them
-			for(ri : rawImages) {
-				readyImages = preProcess(ri);
-				for (i : readyImages) {
+			for(ni : namedImages) {
+				imageInfo = preProcess(ni.path, numChannels, colors);
+				originalImg = new File(ni.path);
+				originalDir = originalImg.getParent();
+				// prepare image info
+				info = "";
+				infoAvailable = false;
+				if (useGeneratedInfo) {
+					info = imageInfo.info;
+					// append a name
+					info += "name: " + ni.name;
+					infoAvailable = true;
+				} else {
+					// look for info.yml
+					infoFile = new File(originalDir + "/info.yml");
+					infoAvailable = infoFile.exists();
+					if (infoAvailable) {
+						IJ.log("Info file found");
+						// read in info file
+						ifstream = new FileInputStream(infoFile);
+						iin = new DataInputStream(ifstream);
+						ibr = new BufferedReader(new InputStreamReader(iin));
+						String strLine;
+						while ((strLine = ibr.readLine()) != null) {
+							info += strLine + "\n";
+						}
+						iin.close();
+					} else {
+						IJ.log("Info file not found");
+					}
+				}
+				// tile all the images
+				for (i : imageInfo.images) {
 					imgFile = new File(i);
 					imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
 					stackDirName = "./tile_output/" + imgBaseName + "/";
 					imgDir = new File(stackDirName);
 					imgDir.mkdirs();
 					tileSingleImage(i);
+					// write out info string
+					if (infoAvailable) {
+						File outputFile = new File(stackDirName + "info.yml");
+						FileWriter out = new FileWriter(outputFile);
+						BufferedWriter bout = new BufferedWriter(out);
+						bout.write(info);
+						bout.close();
+					}
 					// finally remove the image
 					imgFile.delete();
 				}
 			}
 		} catch (e) {
 			System.err.println("Error: " + e.getMessage());
+			e.printStackTrace();
 		}
 	}
 }
-
 
