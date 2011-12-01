@@ -6,7 +6,7 @@ import loci.plugins.util.*;
 import loci.formats.*;
 import loci.formats.meta.*;
 import ome.xml.model.primitives.PositiveFloat;
-
+import java.util.Arrays;
 import mpicbg.ij.integral.*;
 
 int tileSize = 256;
@@ -17,6 +17,7 @@ String overviewName = "small";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
 boolean useGeneratedInfo = false;
+ArrayList channels;
 
 ImagePlus openImage( pathName )
 {
@@ -228,9 +229,10 @@ public class ImageInfo {
 	}
 }
 
-ImageInfo preProcess(imgFileName, numChannels, colors) {
+ImageInfo preProcess(imgFileName, channels, colors) {
 	returnList = new ArrayList();
 	// check if enough colors are available
+	numChannels = channels.size();
 	if (numChannels > colors.size()) {
 		IJ.log("Got only " + colors.length() + " colors, but would need " + numChannels);
 		return null;
@@ -243,42 +245,66 @@ ImageInfo preProcess(imgFileName, numChannels, colors) {
 	IJ.log("Preprocessing image " + imgFileName);
 	macro = "setBatchMode(true);\n"
 		+"run(\"Bio-Formats\", \"open=[" + imgFileName + "] view=Hyperstack stack_order=XYCZT display_metadata=false\");\n"
-		+"Stack.setDisplayMode(\"color\");\n";
+		+"Stack.setDisplayMode(\"color\");\n"
+		+"Stack.getDimensions(width, height, channels, slices, frames);\n";
 		//+"open(\"" + imgFileName + "\");\n";
 	if (useGeneratedInfo) {
 		// get dimension and resolution info
-		macro += "Stack.getDimensions(width, height, channels, slices, frames);\n"
-			+"getPixelSize(unit, pw, ph, pd);\n"
+		macro += "getPixelSize(unit, pw, ph, pd);\n"
 			+"factor = " + unitConvFactor + ";\n"
 			+"dimStr = \"dimension: (\" + width + \",\" + height + \",\" + slices + \")\";\n"
 			+"resStr = \"resolution: (\" + pw*factor + \",\" + ph*factor + \",\" + pd*factor + \")\";\n"
 			+"infoStr = dimStr + \"\\n\" + resStr + \"\\n\";\n";
 	}
+
+	macro += "wantedChannels = newArray(channels);\n"
+		+"Array.fill(wantedChannels, 0);\n";
+
 	// prepare channels
 	for (int i=0; i<numChannels; ++i) {
-		ch = i + 1;
+		ch = channels.get(i);
 		macro += "Stack.setChannel(" + ch  + ");\n"
 			+"setMinAndMax(0, " + maxValue + ");\n"
-			+"run(\"" + colors.get(i) + "\");\n";
+			+"run(\"" + colors.get(i) + "\");\n"
+			+"wantedChannels[" + (ch - 1) + "]=1;\n";
 	}
+
+	// create a string describing which channels to use
+	macro += "activeChannels = \"\";\n"
+		+"for (i=0; i<channels; i++) {\n"
+		+"  activeChannels = activeChannels + wantedChannels[i];\n"
+		+"}";
+
 	// create composite
+	// Make only the channels active that we want
 	macro += "Stack.setDisplayMode(\"composite\");\n"
+		+"Stack.setActiveChannels(activeChannels);\n"
 		+"run(\"Stack to RGB\", \"slices keep\");\n"
 		+"saveAs(\"Tiff\", \"" + compositeName + "\");\n"
 		+"close();\n"
 		+"run(\"Split Channels\");\n";
 	returnList.add(compositeName);
+
 	// create single channels
+	macro += "channelNames = newArray(channels);\n";
 	for (int i=0; i<numChannels; ++i) {
 		// save the channels in reverse
-		ch = numChannels - i;
+		ch = channels.get(i);
 		chName = imgFileNameBase + getChannelName(ch);
-		macro += "run(\"8-bit\");\n"
-			+"run(\"Grays\");\n"
-			+"saveAs(\"Tiff\", \"" + chName + "\");\n"
-			+"close();\n";
 		returnList.add(chName);
+		macro += "channelNames[" + (ch - 1) + "] = \"" + chName + "\";\n";
 	}
+
+	macro += "for (i=0; i<channels; i++) {\n"
+		+"  ch = channels - i - 1;\n"
+		+"  if (wantedChannels[ch]==1) {\n"
+		+"    run(\"8-bit\");\n"
+		+"    run(\"Grays\");\n"
+		+"    saveAs(\"Tiff\", channelNames[ch]);\n"
+		+"  }\n"
+		+"  close();\n"
+		+"}\n";
+
 	if (useGeneratedInfo)
 		macro += "return infoStr;\n";
 
@@ -310,10 +336,16 @@ if ( bsh.args.length > 1 ) {
 	imgFileName = bsh.args[ 0 ];
 	tileSingleImage( imgFileName );
 } else {
-	numChannels = 4;
-	useGeneratedInfo = true;
+	// initialization
+	channels = new ArrayList();
+	channels.add(1);
+	channels.add(2);
+	channels.add(3);
+	channels.add(4);
+	numChannels = channels.size();
+	useGeneratedInfo = false;
 	maxValue = 4095;
-	IJ.log("Tiling a " + numChannels + " channel image with max. value " + maxValue);
+	IJ.log("Tiling channels " + channels.toString() + " of an image with max. value " + maxValue);
 	if (useGeneratedInfo)
 		IJ.log("Will generate info.yml from file data");
 	// look for colors
@@ -400,7 +432,7 @@ if ( bsh.args.length > 1 ) {
 			// create a composite and all single channel images,
 			// save them and then tile them
 			for(ni : namedImages) {
-				imageInfo = preProcess(ni.path, numChannels, colors);
+				imageInfo = preProcess(ni.path, channels, colors);
 				originalImg = new File(ni.path);
 				originalDir = originalImg.getParent();
 				// prepare image info
