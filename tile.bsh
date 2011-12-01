@@ -433,10 +433,26 @@ if ( bsh.args.length > 1 ) {
 				// tile all the images
 				for (i : imageInfo.images) {
 					imgFile = new File(i);
+					// cut away the file extension
 					imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
+					// cut away the channel information
+					chInfoIndex = imgBaseName.lastIndexOf('-');
+					chInfo = imgBaseName.substring(chInfoIndex, imgBaseName.length());
+					imgInfo = imgBaseName.substring(0, chInfoIndex);
 					stackDirName = "./tile_output/" + imgBaseName + "/";
 					imgDir = new File(stackDirName);
+					// Check if the folder already exists. If so, add a counter.
+					counter = 2;
+					while (imgDir.exists()) {
+						// rename the output folder from imgName-chInfo to imgName_counter-chInfo
+						stackDirName = "./tile_output/" + imgInfo + "_" + counter  + chInfo + "/";
+						imgDir = new File(stackDirName);
+						counter++;
+					}
+					IJ.log("Using output dir: " + stackDirName);
+					// create folder for the new tiles
 					imgDir.mkdirs();
+					// tile the image
 					tileSingleImage(i);
 					// write out info string
 					if (infoAvailable) {
