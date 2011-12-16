@@ -17,6 +17,7 @@ String overviewName = "small";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
 boolean useGeneratedInfo = false;
+boolean grayscaleSingleChannels = false;
 ArrayList channels;
 
 ImagePlus openImage( pathName )
@@ -298,9 +299,10 @@ ImageInfo preProcess(imgFileName, channels, colors) {
 	macro += "for (i=0; i<channels; i++) {\n"
 		+"  ch = channels - i - 1;\n"
 		+"  if (wantedChannels[ch]==1) {\n"
-		+"    run(\"8-bit\");\n"
-		+"    run(\"Grays\");\n"
-		+"    saveAs(\"Tiff\", channelNames[ch]);\n"
+		+"    run(\"8-bit\");\n";
+	if (grayscaleSingleChannels)
+		macro += "    run(\"Grays\");\n";
+	macro += "    saveAs(\"Tiff\", channelNames[ch]);\n"
 		+"  }\n"
 		+"  close();\n"
 		+"}\n";
@@ -344,6 +346,7 @@ if ( bsh.args.length > 1 ) {
 	channels.add(4);
 	numChannels = channels.size();
 	useGeneratedInfo = false;
+	grayscaleSingleChannels = true;
 	maxValue = 4095;
 	IJ.log("Tiling channels " + channels.toString() + " of an image with max. value " + maxValue);
 	if (useGeneratedInfo)
