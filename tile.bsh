@@ -25,6 +25,7 @@ ImagePlus openImage( pathName )
 	ImageProcessorReader r = new ImageProcessorReader( new ChannelSeparator( LociPrefs.makeImageReader() ) );
 	MetadataStore store = MetadataTools.createOMEXMLMetadata();
 	r.setMetadataStore( store );
+	CompositeImage openedImage = null;
 	try
 	{
 		r.setId( pathName );
@@ -69,9 +70,8 @@ ImagePlus openImage( pathName )
 		calibration.setUnit( "um" );
 		imp.setDimensions( r.getSizeC(), r.getSizeZ(), r.getSizeT() );
 		imp.setOpenAsHyperStack( true );
-		cimp = new CompositeImage( imp );
-		cimp.setMode( CompositeImage.COMPOSITE );
-		return cimp;
+		openedImage = new CompositeImage( imp );
+		openedImage.setMode( CompositeImage.COMPOSITE );
 	}
 	catch ( FormatException exc )
 	{
@@ -81,7 +81,7 @@ ImagePlus openImage( pathName )
 	{
 		IJ.error("IOException: Sorry, an error occurred: " + exc.getMessage());
 	}
-	return null;
+	return openedImage;
 }
 
 /**
