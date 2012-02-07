@@ -98,6 +98,14 @@ ColorProcessor getTile( ColorProcessor cp, int tileWidth, int tileHeight, int ti
 	int y = tileHeight * tileIndexY;
 	cp.setRoi( x, y, tileWidth, tileHeight );
 	ColorProcessor cpTile = cp.crop();
+	// make sure the new tile is of the correct size
+	if (cpTile.getWidth() != tileWidth || cpTile.getHeight() != tileHeight) {
+		ColorProcessor cpTileNew = cpTile.createProcessor(tileWidth, tileHeight);
+		cpTileNew.setColor(0);
+		cpTileNew.fill();
+		cpTileNew.copyBits(cpTile, 0, 0, Blitter.COPY);
+		cpTile = cpTileNew;
+	}
 	return cpTile;
 }
 
