@@ -12,6 +12,7 @@
 import os
 import glob
 import sys
+from ij.plugin.filter import Info
 from loci.plugins import LociImporter
 from loci.plugins import BF
 from loci.plugins.in import ImporterOptions
@@ -34,7 +35,7 @@ print( "using folder file: " + folderFile )
 
 # Open info file with folders to look in
 infoFiles = []
-file = open("grabmetadata.txt")
+file = open( folderFile )
 while 1:
     line = file.readline()
     line = line[:len(line)-1]
@@ -48,11 +49,13 @@ while 1:
 file.close()
 
 class MetaDataJob:
-    def __init__(self, sourceLog, sourcePath, sourceImages):
+    def __init__(self, sourceLog, sourcePath, sourceImages, outputPath):
         self.log = sourceLog
         self.sourcePath = sourcePath
         self.sourceImages = sourceImages
+        self.outputPath = outputPath
         self.outputData = ""
+        self.numChannels = -1
 
 def createJobs( wrapperFiles ):
     """ Look at wrapper log files
@@ -69,7 +72,6 @@ def createJobs( wrapperFiles ):
         print( infoFile )
         file = open(infoFile)
         # path of input file is output folder
-        outputDir = os.path.dirname(infoFile)
         xmlPath = ""
         sourceImages = []
         while 1:
@@ -107,7 +109,8 @@ def createJobs( wrapperFiles ):
         # show what we got:
         print( "\tSource files: " + ", ".join( sourceImages ) )
         # save the result
-        metadataJobs.append( MetaDataJob( infoFile, xmlPath, sourceImages ) )
+        outputDir = os.path.dirname(infoFile)
+        metadataJobs.append( MetaDataJob( infoFile, xmlPath, sourceImages, outputDir ) )
     return metadataJobs
 
 def checkJobs( jobs ):
@@ -123,13 +126,15 @@ def createOutputData( jobs ):
     """ Reads out the meta data.
     """
     failedImages = []
+    nJobs = len( jobs )
     for n, j in enumerate( jobs ):
-        print( "Job " + str(n) )
+        print( "Job " + str(n+1) + "/" + str( nJobs ) )
         # load every image
         metadata = []
         nImages = len( j.sourceImages )
+        nChannels = -1
         for m, img in enumerate( j.sourceImages ):
-            print( "\tReading image " + str(m) + "/" + str( nImages ) )
+            print( "\tReading image " + str(m+1) + "/" + str( nImages ) )
             imgPath = os.path.join( j.sourcePath, img )
             options = ImporterOptions()
             options.setId( imgPath )
@@ -143,16 +148,81 @@ def createOutputData( jobs ):
                 continue
             # get the meta data
             data = imps[0]
+            if nChannels == -1:
+                nChannels = data.getNChannels() 
             imgInfo = Info();
             info = imgInfo.getImageInfo( data, data.getChannelProcessor() )
             metadata.append( imgPath )
             metadata.append( info )
         j.outputData = '\n\n'.join( metadata )
+        j.numChannels = nChannels
+
+def getDataPart( data, lineStart ):
+    """ Get the end of line in data, starting with lineStart.
+    """
+    posOne = data.find( lineStart )
+    if posOne != -1:
+        posOne = posOne + len( lineStart )
+        posTwo = data.find( "\n", posOne )
+        substring = data[posOne:posTwo]
+        return substring
+    else:
+        print("\tCould not find \"" + lineStart + "\"" )
+        return None
+
+def writeOutData( jobs ):
+    """ Writes out the whole meta data to a file in the folder
+    of the image. A reduced form of that data is written to the
+    info.yml file.
+    """
+    print( "Writing files" )
+    for j in jobs:
+        # write file with all data
+        metadataFile = os.path.join( j.outputPath, "metadada.txt" )
+        f = open(metadataFile, 'w')
+        f.write( j.outputData )
+        f.close()
+        print( "\tWrote " + metadataFile )
+        # read in existing info.yml (if any)
+        existingYAML = ""
+        infoFile = os.path.join( j.outputPath, "info.yml" )
+        if os.path.exists( infoFile ):
+            f = open( infoFile )
+            lines = []
+            while 1:
+                line = f.readline()
+                if not line:
+                    break
+                line = line[:len(line)-1]
+                lines.append( line )
+            f.close()
+            existingYAML = '\n'.join( lines )
+        # create a shortened version of the meta data
+        metadataYAML = []
+        for i in range(0, j.numChannels):
+            md = "metedata-ch" + str(i) + ": "
+            # Look for current channels AnalogPMTOffset
+            offsetStr = "Image " + str(i) + " : AnalogPMTOffset = "
+            offsetData = getDataPart( j.outputData, offsetStr )
+            powerStr = "Image " + str(i) + " : ExcitationOutPutLevel = "
+            powerData =  getDataPart( j.outputData, powerStr )
+            gainStr = "Image " + str(i) + " : PMTVoltage = "
+            gainData =  getDataPart( j.outputData, gainStr )
+            md = md + "PMT Offset: " + offsetData + ", Laser power: " + powerData + ", PMT Voltage: " + gainData
+            metadataYAML.append( md )
+        # write all out to the info.yml
+        shortMetaData = '\n'.join( metadataYAML )
+        outputYAML = existingYAML + "\n" + shortMetaData
+        f = open(infoFile, 'w')
+        f.write( outputYAML )
+        f.close()
+    print( "\tWrote " + infoFile )
 
 def main():
     jobs = createJobs( infoFiles )
     checkJobs( jobs )
     createOutputData( jobs )
+    writeOutData( jobs )
     print( "done" )
 
 
