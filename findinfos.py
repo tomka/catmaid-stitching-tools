@@ -1,22 +1,31 @@
 #!/usr/bin/python
+#
+# This script creates info.yml files in tiling directories, based
+# on the stiching wrapper log.
+#
 
 import os
 import glob
 import sys
 
+outputFile = "info.yml"
+
 # We need one argument for knowing the tiling base folder
 
-if len(sys.argv) != 2:
-	print "usage: findinfos.py /path/to/tiling/base"
+tilingBase = ""
+exportToTiled = False
+if len(sys.argv) > 2:
+	print "usage: findinfos.py [/path/to/tiling/base]"
 	sys.exit(1)
-
-tilingBase = sys.argv[1]
-if os.path.exists(tilingBase):
-	print "using tiling base path: " + tilingBase
-else:
-	print "could not find tiling base path: " + tilingBase
-	sys.exit(1)
-
+elif len(sys.argv) == 2:
+	tilingBase = sys.argv[1]
+	if os.path.exists(tilingBase):
+		print "using tiling base path: " + tilingBase
+		exportToTiled = True
+	else:
+		print "could not find tiling base path: " + tilingBase
+		sys.exit(1)
+	
 # Open info file with folders to look in
 infoFiles = []
 file = open("findinfos.txt")
@@ -29,6 +38,9 @@ while 1:
 		print "not a dir: " + line
 		continue
 	for currentFile in glob.glob( os.path.join(line, '*wrapper*.log')):
+		if os.path.exists( os.path.join( line, outputFile ) ):
+			print("Skipping -- found info.yml in " + line)
+			continue
 		infoFiles.append(currentFile)
 file.close()
 
@@ -83,7 +95,6 @@ for infoFile in infoFiles:
 	outputInfos[outputDir] = dimStr + "\n" + resStr + "\n" + "name: "+ name
 
 # write out info.yml
-outputFile = "info.yml"
 for od in outputInfos:
 	outputStr = outputInfos[od]
 	# find output file paths by getting the name of the first
@@ -94,18 +105,27 @@ for od in outputInfos:
 		# remove extension
 		outputDirBase = outputDirBase[:outputDirBase.rfind(".tif")]
 		break
-	print outputDirBase
-	extensions = ["-ch1", "-ch2", "-ch3", "-ch4", "-composite"]
-	for ext in extensions:
-		outputDir = os.path.join(tilingBase, outputDirBase + ext)
-		outputPath = os.path.join(outputDir, outputFile)
-		if not os.path.exists(outputDir):
-			print "\tNot existing: " + outputDir
-			continue
-		print "\toutput to: " + outputPath
-		f = open(outputPath, 'w')
-		f.write(outputStr)
-		f.close()
+	# Export to info.yml in source folder
+	outputPath = os.path.join(od, outputFile)
+	print "\toutput to: " + outputPath
+	f = open(outputPath, 'w')
+	f.write(outputStr)
+	f.close()
+
+	# Optionally export to tiled folders
+	if exportToTiled:
+		print outputDirBase
+		extensions = ["-ch1", "-ch2", "-ch3", "-ch4", "-composite"]
+		for ext in extensions:
+			outputDir = os.path.join(tilingBase, outputDirBase + ext)
+			outputPath = os.path.join(outputDir, outputFile)
+			if not os.path.exists(outputDir):
+				print "\tNot existing: " + outputDir
+				continue
+			print "\toutput to: " + outputPath
+			f = open(outputPath, 'w')
+			f.write(outputStr)
+			f.close()
 
 print "done"
 
