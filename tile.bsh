@@ -20,6 +20,28 @@ boolean useGeneratedInfo = false;
 boolean grayscaleSingleChannels = false;
 ArrayList channels;
 
+MetadataRetrieve getMetaData( pathName )
+{
+	ImageProcessorReader r = new ImageProcessorReader( new ChannelSeparator( LociPrefs.makeImageReader() ) );
+	MetadataStore store = MetadataTools.createOMEXMLMetadata();
+	r.setMetadataStore( store );
+	try
+	{
+		r.setId( pathName );
+		MetadataRetrieve retrieve = MetadataTools.asRetrieve( r.getMetadataStore() );
+		return retrieve;
+	}
+	catch ( FormatException exc )
+	{
+		IJ.error("FormatException: Sorry, an error occurred: " + exc.getMessage());
+	}
+	catch ( IOException exc )
+	{
+		IJ.error("IOException: Sorry, an error occurred: " + exc.getMessage());
+	}
+	return null;
+}
+
 ImagePlus openImage( pathName )
 {
 	ImageProcessorReader r = new ImageProcessorReader( new ChannelSeparator( LociPrefs.makeImageReader() ) );
@@ -238,7 +260,20 @@ public class ImageInfo {
 	}
 }
 
-ImageInfo preProcess(imgFileName, channels, colors) {
+ImageInfo preProcess(imgFileName, wantedChannels, colors) {
+	// Make sure we only ask for channels that are available
+	metadata = getMetaData( imgFileName );
+	availableChannels = metadata.getChannelCount(0);
+	channels = new ArrayList();
+	for (int i=0; i<wantedChannels.size(); ++i) {
+		ch = wantedChannels.get(i);
+		if (ch <= availableChannels) {
+			channels.add(ch);
+		} else {
+			IJ.log("Dropping request for channel " + ch + " as it is not available.");
+		}
+	}
+
 	returnList = new ArrayList();
 	// check if enough colors are available
 	numChannels = channels.size();
@@ -272,10 +307,12 @@ ImageInfo preProcess(imgFileName, channels, colors) {
 	// prepare channels
 	for (int i=0; i<numChannels; ++i) {
 		ch = channels.get(i);
-		macro += "Stack.setChannel(" + ch  + ");\n"
-			+"setMinAndMax(0, " + maxValue + ");\n"
-			+"run(\"" + colors.get(i) + "\");\n"
-			+"wantedChannels[" + (ch - 1) + "]=1;\n";
+		macro += "if (" + ch + " <= channels) {"
+			+" Stack.setChannel(" + ch  + ");\n"
+			+" setMinAndMax(0, " + maxValue + ");\n"
+			+" run(\"" + colors.get(i) + "\");\n"
+			+" wantedChannels[" + (ch - 1) + "]=1;\n"
+			+"}";
 	}
 
 	// create a string describing which channels to use
@@ -352,11 +389,12 @@ if ( bsh.args.length > 1 ) {
 	channels.add(2);
 	channels.add(3);
 	channels.add(4);
+	channels.add(5);
 	numChannels = channels.size();
 	useGeneratedInfo = false;
 	grayscaleSingleChannels = true;
 	maxValue = 4095;
-	IJ.log("Tiling channels " + channels.toString() + " of an image with max. value " + maxValue);
+	IJ.log("Tiling channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
 	if (useGeneratedInfo)
 		IJ.log("Will generate info.yml from file data");
 	// look for colors
