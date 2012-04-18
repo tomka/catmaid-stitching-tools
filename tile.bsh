@@ -7,6 +7,7 @@ import loci.formats.*;
 import loci.formats.meta.*;
 import ome.xml.model.primitives.PositiveFloat;
 import java.util.Arrays;
+import java.util.HashMap;
 import mpicbg.ij.integral.*;
 
 int tileSize = 256;
@@ -16,6 +17,7 @@ int numScaleLevels = 4;
 String overviewName = "small";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
+String inputFile = "totile.txt";
 boolean useGeneratedInfo = false;
 boolean createZProjections = false;
 boolean grayscaleSingleChannels = false;
@@ -395,56 +397,131 @@ public class NamedImage {
 
 ////////////// main ////////////////
 
-ImagePlus imp = null;
-if ( bsh.args.length > 1 ) {
-	stackDirName = "./tile_output/";
-	if ( bsh.args.length > 1 )
-		stackDirName = bsh.args[ 1 ];
-	imgFileName = bsh.args[ 0 ];
-	tileSingleImage( imgFileName );
+options = new HashMap();
+
+singleFile = null;
+// CL argument based on: http://stackoverflow.com/questions/7341683/parsing-arguments-to-a-java-command-line-program
+for (int i; i < bsh.args.length; i++) {
+	switch (bsh.args[i].charAt(0)) {
+	case '-':
+		if (bsh.args[i].length() < 2)
+			throw new IllegalArgumentException("Not a valid argument: "+bsh.args[i]);
+		if (bsh.args[i].charAt(1) == '-') {
+				if (bsh.args[i].length() < 3)
+					throw new IllegalArgumentException("Not a valid argument: "+bsh.args[i]);
+				// --opt
+				options.put( bsh.args[i].substring(2, bsh.args[i].length() ), "" );
+			} else {
+				if (bsh.args.length - 1 == i)
+					throw new IllegalArgumentException("Expected arg after: "+bsh.args[i]);
+				// -opt
+				options.put( bsh.args[i], bsh.args[i+1] );
+				i++;
+			}
+			break;
+
+	default:
+		if (args.length-1 == i)
+			singleFile = bsh.args[ i ];
+	}
+}
+
+// check what options are available
+
+// help
+if ( options.containsKey( "synopsis") || options.containsKey( "help" ) ) {
+	IJ.log( "This script tiles one or more files for the use with CATMAID" );
+	IJ.log( "You can pass the following arguments and options to the script:" );
+	IJ.log( "-ch <list of channels>   -- Define which channels to use, e.g. -ch \"1,2\"" );
+	IJ.log( "-clr <list of colors>    -- Define a list of ImageJ colors to be used for the channels, e.g. -clr \"Green, Magenta\"" );
+	IJ.log( "-max-val <value>         -- The maximum value for dynamic range adjustments, e.g. -max-val 4095" );
+	IJ.log( "-target-dir <dir>        -- Define the directory in which the result should be saved" );
+	IJ.log( "--gen-info               -- Let the tool generate some meta data, saved in file info.yaml" );
+	IJ.log( "--z-project              -- Let the tool do a z-projection image for each generated stack" );
+	IJ.log( "--color-single-ch        -- Create colored single channels images, intead of gray ones" );
+	System.exit(0);
+}
+
+// channels
+channels = new ArrayList();
+if( options.containsKey( "-ch" ) ) {
+	channelOption = options.get("-ch");
+	wantedChannels = channelOption.split(",");
+	for (int i=0; i < wantedChannels.length; i++)
+		channels.add( new Integer( wantedChannels[ i ].trim() ).intValue() );
+	IJ.log( "Using channels: " + channels.toString() );
 } else {
-	// initialization
-	channels = new ArrayList();
+	// add default channels
+	IJ.log("Using default channels: [1, 2, 3, 4, 5]");
 	channels.add(1);
 	channels.add(2);
 	channels.add(3);
 	channels.add(4);
 	channels.add(5);
 	numChannels = channels.size();
-	useGeneratedInfo = false;
-	grayscaleSingleChannels = true;
+}
+
+// channel colors
+colors = new ArrayList();
+if( options.containsKey( "-clr" ) ) {
+	colorOption = options.get("-clr");
+	wantedColors = colorOption.split(",");
+	for (int i=0; i < wantedColors.length; i++)
+		colors.add( wantedColors[ i ].trim() );
+	IJ.log( "Using colors: " + colors.toString() );
+} else {
+	// add default colors if file was not found
+	colors.add("Blue");
+	colors.add("Green");
+	colors.add("Magenta");
+	colors.add("Grays");
+	IJ.log("Using default colors: [Blue, Green, Magenta, Grays]");
+}
+
+// generated info YAML file -- default: false
+useGeneratedInfo = options.containsKey( "gen-info" );
+
+// create Z projections -- default: false
+createZProjections = options.containsKey( "z-project" );
+
+// gray scale for single channels -- default: true
+grayscaleSingleChannels = ! options.containsKey( "color-single-ch" );
+
+// max value for dynamic range adjustment -- default: 4095
+if ( options.containsKey( "-max-val" ) ) {
+	maxValue = new Integer( options.get( "-max-val" ) ).intValue();
+} else {
 	maxValue = 4095;
+}
+
+// input file -- default totile.txt
+if ( options.containsKey( "-input" ) ) {
+	inputFile = options.get( "-input" );
+} else {
+	inputFile = stackDirName = "totile.txt";
+}
+
+
+// target directory -- default: ./tile_output/
+if ( options.containsKey( "-target-dir" ) ) {
+	stackDirName = options.get( "-target-dir" );
+} else {
+	stackDirName = "./tile_output/";
+}
+
+ImagePlus imp = null;
+if ( singleFile != null ) {
+	tileSingleImage( singleFile );
+} else {
 	IJ.log("Tiling channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
 	if (useGeneratedInfo)
 		IJ.log("Will generate info.yml from file data");
-	// look for colors
-	colors = new ArrayList();
-	cf = new File("colors.txt");
-	if (cf.exists()) {
-		// read in color definitions from file
-		fstream = new FileInputStream(cf);
-		in = new DataInputStream(fstream);
-		br = new BufferedReader(new InputStreamReader(in));
-		String strLine;
-		while ((strLine = br.readLine()) != null) {
-			colors.add(strLine);
-		}
-		in.close();
-		IJ.log("Using colors from colors.txt file");
-	} else {
-		// add default colors if file was not found
-		colors.add("Blue");
-		colors.add("Green");
-		colors.add("Magenta");
-		colors.add("Grays");
-		IJ.log("Using default colors");
-	}
 	// look for names
 	names = new ArrayList();
 	if (useGeneratedInfo) {
 		nf = new File("names.txt");
 		if (nf.exists()) {
-			// read in color definitions from file
+			// read in name definitions from file
 			fstream = new FileInputStream(nf);
 			in = new DataInputStream(fstream);
 			br = new BufferedReader(new InputStreamReader(in));
@@ -459,7 +536,7 @@ if ( bsh.args.length > 1 ) {
 		}
 	}
 	// look for files to tile
-	f = new File("totile.txt");
+	f = new File( inputFile );
 	if (f.exists()) {
 		try {
 			rawImages = new ArrayList();
@@ -573,4 +650,5 @@ if ( bsh.args.length > 1 ) {
 		}
 	}
 }
+IJ.log( "Done." );
 
