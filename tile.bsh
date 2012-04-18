@@ -17,6 +17,7 @@ String overviewName = "small";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
 boolean useGeneratedInfo = false;
+boolean createZProjections = false;
 boolean grayscaleSingleChannels = false;
 ArrayList channels;
 
@@ -241,8 +242,8 @@ void tileSingleImage(imgFileName) {
 	createTiles();
 }
 
-String getChannelName(num) {
-	return "-ch" + num + ".tif";
+String getChannelName(num, postfix) {
+	return "-ch" + num + postfix + ".tif";
 }
 
 public class ImageInfo {
@@ -326,19 +327,34 @@ ImageInfo preProcess(imgFileName, wantedChannels, colors) {
 	macro += "Stack.setDisplayMode(\"composite\");\n"
 		+"Stack.setActiveChannels(activeChannels);\n"
 		+"run(\"Stack to RGB\", \"slices keep\");\n"
-		+"saveAs(\"Tiff\", \"" + compositeName + "\");\n"
-		+"close();\n"
-		+"run(\"Split Channels\");\n";
+		+"saveAs(\"Tiff\", \"" + compositeName + "\");\n";
 	returnList.add(compositeName);
+	if (createZProjections) {
+		fileName = imgFileNameBase + "-composite-zproj.tif";
+		returnList.add(fileName);
+		macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
+			+"saveAs(\"Tiff\", \"" + fileName + "\");\n"
+			+"close();\n";
+	}
+	// close the RGB image
+	macro += "close();\n";
+
+	macro += "run(\"Split Channels\");\n";
 
 	// create single channels
 	macro += "channelNames = newArray(channels);\n";
+	macro += "channelNamesZProj = newArray(channels);\n";
 	for (int i=0; i<numChannels; ++i) {
 		// save the channels in reverse
 		ch = channels.get(i);
-		chName = imgFileNameBase + getChannelName(ch);
+		chName = imgFileNameBase + getChannelName(ch, "");
 		returnList.add(chName);
 		macro += "channelNames[" + (ch - 1) + "] = \"" + chName + "\";\n";
+		if (createZProjections) {
+			chName = imgFileNameBase + getChannelName(ch, "-zproj");
+			returnList.add(chName);
+			macro += "channelNamesZProj[" + (ch - 1) + "] = \"" + chName + "\";\n";
+		}
 	}
 
 	macro += "for (i=0; i<channels; i++) {\n"
@@ -347,8 +363,12 @@ ImageInfo preProcess(imgFileName, wantedChannels, colors) {
 		+"    run(\"8-bit\");\n";
 	if (grayscaleSingleChannels)
 		macro += "    run(\"Grays\");\n";
-	macro += "    saveAs(\"Tiff\", channelNames[ch]);\n"
-		+"  }\n"
+	macro += "    saveAs(\"Tiff\", channelNames[ch]);\n";
+	if (createZProjections) {
+		macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
+			   + "saveAs(\"Tiff\", channelNamesZProj[ch]);\n";
+	}
+	macro +="  }\n"
 		+"  close();\n"
 		+"}\n";
 
