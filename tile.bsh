@@ -24,6 +24,14 @@ boolean grayscaleSingleChannels = false;
 ArrayList channels, colors, names;
 ImagePlus imp = null;
 
+/**
+ * A data structure to keep information about
+ * a tiling job.
+ */
+public class TilingJob {
+	public ArrayList rawImages = null;
+}
+
 MetadataRetrieve getMetaData( pathName )
 {
 	ImageProcessorReader r = new ImageProcessorReader( new ChannelSeparator( LociPrefs.makeImageReader() ) );
@@ -398,7 +406,50 @@ public class NamedImage {
 	}
 }
 
-void work() {
+ArrayList getInputFiles( path )
+{
+	// look for files to tile
+	files = null;
+	f = new File( path );
+	if ( f.exists() ) {
+		in = null;
+		try {
+			// look for a list of images to work on
+			files = new ArrayList();
+			fstream = new FileInputStream(f);
+			in = new DataInputStream(fstream);
+			br = new BufferedReader(new InputStreamReader(in));
+			String strLine;
+			while ((strLine = br.readLine()) != null) {
+				// skip comments (lines starting with #)
+				if (strLine.trim().startsWith("#"))
+					continue;
+				// try to treat line as file path
+				imgFile = new File(strLine);
+				if ( imgFile.exists() ) {
+					files.add(strLine);
+					IJ.log("found file " + strLine);
+				} else {
+					IJ.log("could not find file " + strLine);
+				}
+			}
+		} catch (e) {
+			System.err.println("Error: " + e.getMessage());
+			e.printStackTrace();
+		} finally {
+			if (in != null)
+				in.close();
+		}
+	} else {
+		IJ.log( "Couldn't open input file: " + path );
+	}
+	return files;
+}
+
+void work( job ) {
+	// make sure we got a job
+	if ( job == null )
+			throw new IllegalArgumentException( "A job must not be null" );
 	if ( singleFile != null ) {
 		tileSingleImage( singleFile );
 	} else {
@@ -424,119 +475,95 @@ void work() {
 				return;
 			}
 		}
-		// look for files to tile
-		f = new File( inputFile );
-		if (f.exists()) {
-			try {
-				rawImages = new ArrayList();
-				// look for a list of images to work on
-				fstream = new FileInputStream(f);
-				in = new DataInputStream(fstream);
-				br = new BufferedReader(new InputStreamReader(in));
-				String strLine;
-				while ((strLine = br.readLine()) != null) {
-					// skip comments (lines starting with #)
-					if (strLine.trim().startsWith("#"))
-						continue;
-					// try to treat line as file path
-					imgFile = new File(strLine);
-					if (imgFile.exists()) {
-						IJ.log("found file " + strLine);
-						rawImages.add(strLine);
-					} else {
-						IJ.log("could not find file " + strLine);
-					}
+		try {
+			namedImages = new ArrayList();
+			if (useGeneratedInfo) {
+				// check if every file has a name
+				if (job.rawImages.size() != names.size()) {
+					IJ.log("The number of names differs from the number of files");
+					return;
 				}
-				in.close();
-				namedImages = new ArrayList();
-				if (useGeneratedInfo) {
-					// check if every file has a name
-					if (rawImages.size() != names.size()) {
-						IJ.log("The number of names differs from the number of files");
-						return;
-					}
-					for (i=0; i<rawImages.size(); ++i) {
-						namedImages.add(new NamedImage(rawImages.get(i), names.get(i)));
-					}
-				} else {
-					for (i=0; i<rawImages.size(); ++i) {
-						namedImages.add(new NamedImage(rawImages.get(i), "No Name"));
-					}
+				for (i=0; i<job.rawImages.size(); ++i) {
+					namedImages.add(new NamedImage(job.rawImages.get(i), names.get(i)));
 				}
-				// Open every image, reset the dynamic range,
-				// create a composite and all single channel images,
-				// save them and then tile them
-				for(ni : namedImages) {
-					imageInfo = preProcess(ni.path, channels, colors);
-					originalImg = new File(ni.path);
-					originalDir = originalImg.getParent();
-					// prepare image info
-					info = "";
-					infoAvailable = false;
-					if (useGeneratedInfo) {
-						info = imageInfo.info;
-						// append a name
-						info += "name: " + ni.name;
-						infoAvailable = true;
-					} else {
-						// look for info.yml
-						infoFile = new File(originalDir + "/info.yml");
-						infoAvailable = infoFile.exists();
-						if (infoAvailable) {
-							IJ.log("Info file found");
-							// read in info file
-							ifstream = new FileInputStream(infoFile);
-							iin = new DataInputStream(ifstream);
-							ibr = new BufferedReader(new InputStreamReader(iin));
-							String strLine;
-							while ((strLine = ibr.readLine()) != null) {
-								info += strLine + "\n";
-							}
-							iin.close();
-						} else {
-							IJ.log("Info file not found");
-						}
-					}
-					// tile all the images
-					for (i : imageInfo.images) {
-						imgFile = new File(i);
-						// cut away the file extension
-						imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
-						// cut away the channel information
-						chInfoIndex = imgBaseName.lastIndexOf('-');
-						chInfo = imgBaseName.substring(chInfoIndex, imgBaseName.length());
-						imgInfo = imgBaseName.substring(0, chInfoIndex);
-						stackDirName = "./tile_output/" + imgBaseName + "/";
-						imgDir = new File(stackDirName);
-						// Check if the folder already exists. If so, add a counter.
-						counter = 2;
-						while (imgDir.exists()) {
-							// rename the output folder from imgName-chInfo to imgName_counter-chInfo
-							stackDirName = "./tile_output/" + imgInfo + "_" + counter  + chInfo + "/";
-							imgDir = new File(stackDirName);
-							counter++;
-						}
-						IJ.log("Using output dir: " + stackDirName);
-						// create folder for the new tiles
-						imgDir.mkdirs();
-						// tile the image
-						tileSingleImage(i);
-						// write out info string
-						if (infoAvailable) {
-							File outputFile = new File(stackDirName + "info.yml");
-							FileWriter out = new FileWriter(outputFile);
-							BufferedWriter bout = new BufferedWriter(out);
-							bout.write(info);
-							bout.close();
-						}
-						// finally remove the image
-						imgFile.delete();
-					}
+			} else {
+				for (i=0; i<job.rawImages.size(); ++i) {
+					namedImages.add(new NamedImage(job.rawImages.get(i), "No Name"));
 				}
-			} catch (e) {
-				System.err.println("Error: " + e.getMessage());
-				e.printStackTrace();
 			}
+			// Open every image, reset the dynamic range,
+			// create a composite and all single channel images,
+			// save them and then tile them
+			for(ni : namedImages) {
+				imageInfo = preProcess(ni.path, channels, colors);
+				originalImg = new File(ni.path);
+				originalDir = originalImg.getParent();
+				// prepare image info
+				info = "";
+				infoAvailable = false;
+				if (useGeneratedInfo) {
+					info = imageInfo.info;
+					// append a name
+					info += "name: " + ni.name;
+					infoAvailable = true;
+				} else {
+					// look for info.yml
+					infoFile = new File(originalDir + "/info.yml");
+					infoAvailable = infoFile.exists();
+					if (infoAvailable) {
+						IJ.log("Info file found");
+						// read in info file
+						ifstream = new FileInputStream(infoFile);
+						iin = new DataInputStream(ifstream);
+						ibr = new BufferedReader(new InputStreamReader(iin));
+						String strLine;
+						while ((strLine = ibr.readLine()) != null) {
+							info += strLine + "\n";
+						}
+						iin.close();
+					} else {
+						IJ.log("Info file not found");
+					}
+				}
+				// tile all the images
+				for (i : imageInfo.images) {
+					imgFile = new File(i);
+					// cut away the file extension
+					imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
+					// cut away the channel information
+					chInfoIndex = imgBaseName.lastIndexOf('-');
+					chInfo = imgBaseName.substring(chInfoIndex, imgBaseName.length());
+					imgInfo = imgBaseName.substring(0, chInfoIndex);
+					stackDirName = "./tile_output/" + imgBaseName + "/";
+					imgDir = new File(stackDirName);
+					// Check if the folder already exists. If so, add a counter.
+					counter = 2;
+					while (imgDir.exists()) {
+						// rename the output folder from imgName-chInfo to imgName_counter-chInfo
+						stackDirName = "./tile_output/" + imgInfo + "_" + counter  + chInfo + "/";
+						imgDir = new File(stackDirName);
+						counter++;
+					}
+					IJ.log("Using output dir: " + stackDirName);
+					// create folder for the new tiles
+					imgDir.mkdirs();
+					// tile the image
+					tileSingleImage(i);
+					// write out info string
+					if (infoAvailable) {
+						File outputFile = new File(stackDirName + "info.yml");
+						FileWriter out = new FileWriter(outputFile);
+						BufferedWriter bout = new BufferedWriter(out);
+						bout.write(info);
+						bout.close();
+					}
+					// finally remove the image
+					imgFile.delete();
+				}
+			}
+		} catch (e) {
+			System.err.println("Error: " + e.getMessage());
+			e.printStackTrace();
 		}
 	}
 }
@@ -658,10 +685,12 @@ for (int i; i < bsh.args.length; i++) {
 	}
 }
 
-// parse arguments
+// parse arguments and create job
 setup( options );
+job = new TilingJob();
+job.rawImages = getInputFiles( inputFile );
 // start tile creation
-work();
+work( job );
 // end
 IJ.log( "Done." );
 
