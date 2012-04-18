@@ -18,6 +18,8 @@ String overviewName = "small";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
 String inputFile = "totile.txt";
+String infoFileName = "project.yaml";
+String stackDirName = null;
 boolean useGeneratedInfo = false;
 boolean createZProjections = false;
 boolean grayscaleSingleChannels = false;
@@ -30,6 +32,7 @@ ImagePlus imp = null;
  */
 public class TilingJob {
 	public ArrayList rawImages = null;
+	public String outputDir = null;
 }
 
 MetadataRetrieve getMetaData( pathName )
@@ -158,7 +161,7 @@ int getNumScaleLevels( int height, int tileSize )
 		return (int) s + 1;
 }
 
-void createTiles() {
+void createTiles( job ) {
 	int numSlices = imp.getNSlices();
 	int tileWidth = tileSize;
 	int tileHeight = tileSize;
@@ -189,7 +192,7 @@ void createTiles() {
 			if ( height > rows * tileHeight )
 				++rows;
 			
-			sliceDirName = stackDirName + "/" + sliceIndex;
+			sliceDirName = job.outputDir + "/" + sliceIndex;
 
 			// create tiles
 			for ( int tileIndexY = 0; tileIndexY < rows; ++tileIndexY )
@@ -239,7 +242,7 @@ void createTiles() {
 	}
 }
 
-void tileSingleImage(imgFileName) {
+void tileSingleImage( job, imgFileName ) {
 	imgFile = new File( imgFileName );
 	if ( ! imgFile.exists() || ! imgFile.isFile() )
 	{
@@ -252,7 +255,7 @@ void tileSingleImage(imgFileName) {
 		IJ.log( "File `" + imgFileName + "' could not be opened." );
 		return;
 	}
-	createTiles();
+	createTiles( job );
 }
 
 String getChannelName(num, postfix) {
@@ -343,7 +346,7 @@ ImageInfo preProcess(imgFileName, wantedChannels, colors) {
 		+"saveAs(\"Tiff\", \"" + compositeName + "\");\n";
 	returnList.add(compositeName);
 	if (createZProjections) {
-		fileName = imgFileNameBase + "-composite-zproj.tif";
+		fileName = imgFileNameBase + "-composite_zproj.tif";
 		returnList.add(fileName);
 		macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
 			+"saveAs(\"Tiff\", \"" + fileName + "\");\n"
@@ -364,7 +367,7 @@ ImageInfo preProcess(imgFileName, wantedChannels, colors) {
 		returnList.add(chName);
 		macro += "channelNames[" + (ch - 1) + "] = \"" + chName + "\";\n";
 		if (createZProjections) {
-			chName = imgFileNameBase + getChannelName(ch, "-zproj");
+			chName = imgFileNameBase + getChannelName(ch, "_zproj");
 			returnList.add(chName);
 			macro += "channelNamesZProj[" + (ch - 1) + "] = \"" + chName + "\";\n";
 		}
@@ -451,7 +454,7 @@ void work( job ) {
 	if ( job == null )
 			throw new IllegalArgumentException( "A job must not be null" );
 	if ( singleFile != null ) {
-		tileSingleImage( singleFile );
+		tileSingleImage( job, singleFile );
 	} else {
 		IJ.log("Tiling channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
 		if (useGeneratedInfo)
@@ -508,10 +511,10 @@ void work( job ) {
 					infoAvailable = true;
 				} else {
 					// look for info.yml
-					infoFile = new File(originalDir + "/info.yml");
+					infoFile = new File(originalDir + "/" + infoFileName);
 					infoAvailable = infoFile.exists();
 					if (infoAvailable) {
-						IJ.log("Info file found");
+						IJ.log("Info file (" + infoFileName + ") found");
 						// read in info file
 						ifstream = new FileInputStream(infoFile);
 						iin = new DataInputStream(ifstream);
@@ -522,36 +525,41 @@ void work( job ) {
 						}
 						iin.close();
 					} else {
-						IJ.log("Info file not found");
+						IJ.log("Info file (" + infoFileName + ") not found");
 					}
 				}
+
+				// create output folder
+				originalImageName = originalImg.getName().substring( 0, originalImg.getName().lastIndexOf('.') );
+				outputBase = stackDirName + originalImageName + "/";
+				outputDir = new File( outputBase );
+				// Check if the folder already exists. If so, add a counter.
+				counter = 2;
+				while ( outputDir.exists() ) {
+					// rename the output folder from output to output_2
+					outputBase = stackDirName + originalImageName + "_" + counter + "/";
+					outputDir = new File( outputBase );
+					counter++;
+				}
+				outputDir.mkdirs();
+
 				// tile all the images
 				for (i : imageInfo.images) {
 					imgFile = new File(i);
 					// cut away the file extension
 					imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
 					// cut away the channel information
-					chInfoIndex = imgBaseName.lastIndexOf('-');
-					chInfo = imgBaseName.substring(chInfoIndex, imgBaseName.length());
-					imgInfo = imgBaseName.substring(0, chInfoIndex);
-					stackDirName = "./tile_output/" + imgBaseName + "/";
-					imgDir = new File(stackDirName);
-					// Check if the folder already exists. If so, add a counter.
-					counter = 2;
-					while (imgDir.exists()) {
-						// rename the output folder from imgName-chInfo to imgName_counter-chInfo
-						stackDirName = "./tile_output/" + imgInfo + "_" + counter  + chInfo + "/";
-						imgDir = new File(stackDirName);
-						counter++;
-					}
-					IJ.log("Using output dir: " + stackDirName);
+					imgDirName = outputBase + imgBaseName + "/";
+					imgDir = new File(imgDirName);
+					job.outputDir = imgDirName;
+					IJ.log("Using output dir: " + imgDirName);
 					// create folder for the new tiles
 					imgDir.mkdirs();
 					// tile the image
-					tileSingleImage(i);
+					tileSingleImage( job, i );
 					// write out info string
 					if (infoAvailable) {
-						File outputFile = new File(stackDirName + "info.yml");
+						File outputFile = new File(outputBase + "/" + infoFileName);
 						FileWriter out = new FileWriter(outputFile);
 						BufferedWriter bout = new BufferedWriter(out);
 						bout.write(info);
@@ -579,6 +587,7 @@ void setup( options ) {
 		IJ.log( "-clr <list of colors>    -- Define a list of ImageJ colors to be used for the channels, e.g. -clr \"Green, Magenta\"" );
 		IJ.log( "-max-val <value>         -- The maximum value for dynamic range adjustments, e.g. -max-val 4095" );
 		IJ.log( "-target-dir <dir>        -- Define the directory in which the result should be saved" );
+		IJ.log( "-info-file <filename>    -- The name of the info YAML file" );
 		IJ.log( "--gen-info               -- Let the tool generate some meta data, saved in file info.yaml" );
 		IJ.log( "--z-project              -- Let the tool do a z-projection image for each generated stack" );
 		IJ.log( "--color-single-ch        -- Create colored single channels images, intead of gray ones" );
@@ -641,9 +650,8 @@ void setup( options ) {
 	if ( options.containsKey( "-input" ) ) {
 		inputFile = options.get( "-input" );
 	} else {
-		inputFile = stackDirName = "totile.txt";
+		inputFile = "totile.txt";
 	}
-
 
 	// target directory -- default: ./tile_output/
 	if ( options.containsKey( "-target-dir" ) ) {
@@ -651,12 +659,21 @@ void setup( options ) {
 	} else {
 		stackDirName = "./tile_output/";
 	}
+
+	// info file name -- default: project.yaml
+	if ( options.containsKey( "-info-file" ) ) {
+		infoFileName = options.get( "-info-file" );
+	} else {
+		infoFileName = "project.yaml";
+	}
 }
 
 ////////////// main ////////////////
 
 // a place to keep our options
 options = new HashMap();
+
+job = new TilingJob();
 
 singleFile = null;
 // CL argument based on: http://stackoverflow.com/questions/7341683
@@ -687,7 +704,6 @@ for (int i; i < bsh.args.length; i++) {
 
 // parse arguments and create job
 setup( options );
-job = new TilingJob();
 job.rawImages = getInputFiles( inputFile );
 // start tile creation
 work( job );
