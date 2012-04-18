@@ -162,11 +162,6 @@ void createTiles() {
 	int lastStep = 0;
 	for ( int sliceIndex = 0; sliceIndex < numSlices; ++sliceIndex )
 	{
-		percent = (int) (((sliceIndex + 1) / (float) numSlices) * 100.0 + 0.5);
-		if (percent >= lastStep) {
-			IJ.log(lastStep + "% completed");
-			lastStep += 10;
-		}
 		// expect a hyper stack and set slice accordingly"
 		imp.setPosition(1, sliceIndex+1, 1);
 		imp.updateImage();
@@ -226,6 +221,13 @@ void createTiles() {
 			saver.saveAsJpeg( overviewFileName );
 		}
 
+		percent = (int) ( ((sliceIndex + 1) / (float) numSlices) * 100.0 + 0.5 );
+		diff = percent - lastStep;
+		if ( diff >= 10  || percent == 100 ) {
+			lastStep += (int)diff;
+			//lastStep = Math.min( 100, lastStep );
+			IJ.log(lastStep + "% completed");
+		}
 	}
 }
 
