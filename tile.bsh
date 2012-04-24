@@ -35,6 +35,30 @@ public class TilingJob {
 	public String outputDir = null;
 }
 
+public class ImageInfo {
+	public ArrayList images;
+	public String info;
+
+	public ImageInfo(ArrayList list, String info) {
+		this.images = list;
+		this.info = info;
+	}
+
+	public ImageInfo(ArrayList list) {
+		this.images = list;
+		this.info = "None";
+	}
+}
+
+public class NamedImage {
+	String path;
+	String name;
+	public NamedImage(String path, String name) {
+		this.path = path;
+		this.name = name;
+	}
+}
+
 MetadataRetrieve getMetaData( pathName )
 {
 	ImageProcessorReader r = new ImageProcessorReader( new ChannelSeparator( LociPrefs.makeImageReader() ) );
@@ -262,21 +286,6 @@ String getChannelName(num, postfix) {
 	return "-ch" + num + postfix + ".tif";
 }
 
-public class ImageInfo {
-	public ArrayList images;
-	public String info;
-
-	public ImageInfo(ArrayList list, String info) {
-		this.images = list;
-		this.info = info;
-	}
-
-	public ImageInfo(ArrayList list) {
-		this.images = list;
-		this.info = "None";
-	}
-}
-
 ImageInfo preProcess(imgFileName, wantedChannels, colors) {
 	// Make sure we only ask for channels that are available
 	metadata = getMetaData( imgFileName );
@@ -400,15 +409,6 @@ ImageInfo preProcess(imgFileName, wantedChannels, colors) {
 	}
 }
 
-public class NamedImage {
-	String path;
-	String name;
-	public NamedImage(String path, String name) {
-		this.path = path;
-		this.name = name;
-	}
-}
-
 ArrayList getInputFiles( path )
 {
 	// look for files to tile
@@ -510,7 +510,7 @@ void work( job ) {
 					info += "name: " + ni.name;
 					infoAvailable = true;
 				} else {
-					// look for info.yml
+					// look for project file
 					infoFile = new File(originalDir + "/" + infoFileName);
 					infoAvailable = infoFile.exists();
 					if (infoAvailable) {
