@@ -30,7 +30,7 @@ ImagePlus imp = null;
  * A data structure to keep information about
  * a tiling job.
  */
-public class TilingJob {
+public class TilingJobPool {
 	public ArrayList rawImages = null;
 	public String outputDir = null;
 }
@@ -673,7 +673,7 @@ void setup( options ) {
 // a place to keep our options
 options = new HashMap();
 
-job = new TilingJob();
+job = new TilingJobPool();
 
 singleFile = null;
 // CL argument based on: http://stackoverflow.com/questions/7341683
