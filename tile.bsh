@@ -2,12 +2,16 @@ import ij.*;
 import ij.io.*;
 import ij.process.*;
 
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+
 import loci.plugins.util.*;
 import loci.formats.*;
 import loci.formats.meta.*;
 import ome.xml.model.primitives.PositiveFloat;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.ArrayList;
 import mpicbg.ij.integral.*;
 
 int tileSize = 256;
@@ -18,22 +22,12 @@ String overviewName = "small";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
 String inputFile = "totile.txt";
-String infoFileName = "project.yaml";
 String stackDirName = null;
 boolean useGeneratedInfo = false;
 boolean createZProjections = false;
 boolean grayscaleSingleChannels = false;
 ArrayList channels, colors, names;
 ImagePlus imp = null;
-
-/**
- * A data structure to keep information about
- * a tiling job.
- */
-public class TilingJobPool {
-	public ArrayList rawImages = null;
-	public String outputDir = null;
-}
 
 public class ImageInfo {
 	public ArrayList images;
@@ -50,6 +44,37 @@ public class ImageInfo {
 	}
 }
 
+/**
+ * One stack of tiled images.
+ */
+public class Stack {
+	public String folder;
+	public String name;
+	public String type;
+	public String metadata;
+	public ImageInfo info;
+}
+
+/**
+ * Encapsulates project meta data and a set of stacks.
+ */
+public class Project {
+	public String name;
+	public String dimension;
+	public String resolution;
+	public ArrayList stacks;
+
+	public Project( String name, String dim, String res ) {
+		this.name = name;
+		this.dimension = dim;
+		this.resolution = res;
+	}
+
+	public String toString() {
+		return "Project: " + name + " dim: " + dimension + " res: " + resolution;
+	}
+}
+
 public class NamedImage {
 	String path;
 	String name;
@@ -57,6 +82,86 @@ public class NamedImage {
 		this.path = path;
 		this.name = name;
 	}
+}
+
+/**
+ * A data structure to keep information about
+ * a tiling job.
+ */
+public class TilingJobPool {
+	public ArrayList jobs = new ArrayList();
+}
+
+public class TilingJob {
+	public Project project;
+	public String projectFileName = "project.yaml";
+	protected String originalProjectFileContent = "";
+	public String rawImage;
+	public String outputDir;
+
+	public TilingJob ( String imagePath ) {
+		this.rawImage = imagePath;
+		setup( imagePath );
+	}
+
+	protected setup( String imagePath ) {
+		originalImg = new File( imagePath );
+		originalDir = originalImg.getParent();
+		// look for project file
+		infoFile = new File(originalDir + "/" + projectFileName);
+		infoAvailable = infoFile.exists();
+		originalProjectFileContent = "";
+		// read it in if present
+		if (infoAvailable) {
+			IJ.log("Info file (" + projectFileName + ") found");
+			// read in info file
+			ifstream = new FileInputStream(infoFile);
+			iin = new DataInputStream(ifstream);
+			ibr = new BufferedReader(new InputStreamReader(iin));
+			String strLine;
+			while ((strLine = ibr.readLine()) != null) {
+				this.originalProjectFileContent += strLine + "\n";
+			}
+			iin.close();
+		} else {
+			IJ.log("Info file (" + projectFileName + ") not found");
+		}
+		// parse the contents for project information
+		d = originalProjectFileContent;
+		pName = stripQuotes( getYamlMappingData( d, "project", "name", "" ) );
+		pDim = stripQuotes( getYamlMappingData( d, "project", "dimension", "" ) );
+		pRes = stripQuotes( getYamlMappingData( d, "project", "resolution", "" ) );
+		this.project = new Project( pName, pDim, pRes );
+	}
+}
+
+/**
+ * Parses the data to find a simple YAML structure.
+ */
+String getYamlMappingData( String data, String parent, String child, String defaultValue ) {
+	String regex = parent + ":(?:\\s*\\n)+(?:^\\s+.*\\n)*(?:^\\s+" + child + ":\\s*(.*)$)";
+	Pattern p = Pattern.compile( regex, Pattern.MULTILINE | Pattern.UNIX_LINES );
+	Matcher m = p.matcher( data );
+	// if group 1 is't available, we did not find what we were looking for
+	if (!m.find() || m.groupCount() == 0)
+		return defaultValue;
+	else
+		return m.group(1);
+}
+
+/**
+ * Strips quotes (") before and after a string if present.
+ */
+String stripQuotes( String str) {
+	int start = 0, end = str.length();
+	if (str.startsWith("\""))
+		start = 1;
+	if (str.endsWith("\""))
+		end = str.length() - 1;
+	if (start != 0 || end != str.length())
+		return str.substring(start, end);
+	else
+		return str;
 }
 
 MetadataRetrieve getMetaData( pathName )
@@ -449,16 +554,26 @@ ArrayList getInputFiles( path )
 	return files;
 }
 
-void work( job ) {
+void processJob( job ) {
+	IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
+
+}
+
+void work( pool ) {
 	// make sure we got a job
-	if ( job == null )
-			throw new IllegalArgumentException( "A job must not be null" );
+	if ( pool == null )
+			throw new IllegalArgumentException( "A pool must not be null" );
 	if ( singleFile != null ) {
-		tileSingleImage( job, singleFile );
+		tileSingleImage( pool.jobs.get(0), singleFile );
 	} else {
-		IJ.log("Tiling channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
+		// work serially on the jobs
+		for (job : pool.jobs) {
+			processJob( job );
+		}
+		return;
+
 		if (useGeneratedInfo)
-			IJ.log("Will generate info.yml from file data");
+			IJ.log("Will generate meta data");
 		// look for names
 		names = new ArrayList();
 		if (useGeneratedInfo) {
@@ -479,28 +594,27 @@ void work( job ) {
 			}
 		}
 		try {
+			// create a new tiling job for every image
+
 			namedImages = new ArrayList();
 			if (useGeneratedInfo) {
 				// check if every file has a name
-				if (job.rawImages.size() != names.size()) {
+				if (pool.jobs.size() != names.size()) {
 					IJ.log("The number of names differs from the number of files");
 					return;
 				}
-				for (i=0; i<job.rawImages.size(); ++i) {
-					namedImages.add(new NamedImage(job.rawImages.get(i), names.get(i)));
+				for (i=0; i<pool.jobs.size(); ++i) {
+					namedImages.add(new NamedImage(pool.jobs.get(i).rawImage, names.get(i)));
 				}
 			} else {
-				for (i=0; i<job.rawImages.size(); ++i) {
-					namedImages.add(new NamedImage(job.rawImages.get(i), "No Name"));
+				for (i=0; i<pool.jobs.size(); ++i) {
+					namedImages.add(new NamedImage(pool.jobs.get(i).rawImage, "No Name"));
 				}
 			}
 			// Open every image, reset the dynamic range,
 			// create a composite and all single channel images,
 			// save them and then tile them
 			for(ni : namedImages) {
-				imageInfo = preProcess(ni.path, channels, colors);
-				originalImg = new File(ni.path);
-				originalDir = originalImg.getParent();
 				// prepare image info
 				info = "";
 				infoAvailable = false;
@@ -528,6 +642,10 @@ void work( job ) {
 						IJ.log("Info file (" + infoFileName + ") not found");
 					}
 				}
+
+				imageInfo = preProcess(ni.path, channels, colors, project);
+				originalImg = new File(ni.path);
+				originalDir = originalImg.getParent();
 
 				// create output folder
 				originalImageName = originalImg.getName().substring( 0, originalImg.getName().lastIndexOf('.') );
@@ -673,7 +791,7 @@ void setup( options ) {
 // a place to keep our options
 options = new HashMap();
 
-job = new TilingJobPool();
+jobPool = new TilingJobPool();
 
 singleFile = null;
 // CL argument based on: http://stackoverflow.com/questions/7341683
@@ -702,11 +820,13 @@ for (int i; i < bsh.args.length; i++) {
 	}
 }
 
-// parse arguments and create job
+// parse arguments and create jobs
 setup( options );
-job.rawImages = getInputFiles( inputFile );
+files = getInputFiles( inputFile );
+for (String f : files)
+	jobPool.jobs.add( new TilingJob( f ) );
 // start tile creation
-work( job );
+work( jobPool );
 // end
 IJ.log( "Done." );
 
