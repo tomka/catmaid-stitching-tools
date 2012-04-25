@@ -44,6 +44,30 @@ public class ImageInfo {
 	}
 }
 
+Matcher createYamlTreeMatcher( String data, String parent ) {
+	String regex = parent + ":(?:\\s*\\n)+(?:^\\s+.*$\\n?)*";
+	Pattern p = Pattern.compile( regex, Pattern.MULTILINE | Pattern.UNIX_LINES );
+	return p.matcher( data );
+}
+
+Matcher createYamlMappingMatcher( String data, String parent, String child ) {
+	String regex = parent + ":(?:\\s*\\n)+(?:^\\s+.*\\n)*(?:^\\s+" + child + ":\\s*(.*)$)";
+	Pattern p = Pattern.compile( regex, Pattern.MULTILINE | Pattern.UNIX_LINES );
+	return p.matcher( data );
+}
+
+/**
+ * Parses the data to find a simple YAML structure.
+ */
+String getYamlMappingData( String data, String parent, String child, String defaultValue ) {
+	Matcher m = createYamlMappingMatcher( data, parent, child );
+	// if group 1 is't available, we did not find what we were looking for
+	if (!m.find() || m.groupCount() == 0)
+		return defaultValue;
+	else
+		return m.group(1);
+}
+
 /**
  * One stack of tiled images.
  */
@@ -53,6 +77,17 @@ public class Stack {
 	public String type;
 	public String metadata;
 	public ImageInfo info;
+
+	public Stack( String folder, String name, String type, String meta ) {
+		this.folder = folder;
+		this.name = name;
+		this.type = type;
+		this.metadata = meta;
+	}
+
+	public String toString() {
+		return "Stack: " + name + " <folder>: " + folder + " <type>: " + type + " <metadata>: " + metadata;
+	}
 }
 
 /**
@@ -70,8 +105,48 @@ public class Project {
 		this.resolution = res;
 	}
 
+	public Project( String yamlData ) {
+		this.fromYamlContent( yamlData );
+	}
+
+	/**
+	 * Parse data for project information, expect it to be in
+     * a YAML like format.
+     */
+	protected fromYamlContent( String data ) {
+		// look for project specification
+		this.name= stripQuotes( getYamlMappingData( data, "project", "name", "" ) );
+		this.dimension = stripQuotes( getYamlMappingData( data, "project", "dimension", "" ) );
+		this.resolution = stripQuotes( getYamlMappingData( data, "project", "resolution", "" ) );
+		// look for stacks
+		this.stacks = new ArrayList();
+		Matcher m = createYamlTreeMatcher( data, "stack" );
+		while ( m.find() ) {
+			String stackData = m.group(0);
+			String sFolder = stripQuotes( getYamlMappingData( stackData, "stack", "folder", "" ) );
+			String sName = stripQuotes( getYamlMappingData( stackData, "stack", "name", "" ) );
+			String sType = stripQuotes( getYamlMappingData( stackData, "stack", "type", "" ) );
+			String sMeta = stripQuotes( getYamlMappingData( stackData, "stack", "metadata", "" ) );
+			// create and store new stack
+			stacks.add( new Stack( sFolder, sName, sType, sMeta ) );
+		}
+	// if group 1 is't available, we did not find what we were looking for
+	if (!m.find() || m.groupCount() == 0)
+		return defaultValue;
+	else
+		return m.group(1);
+	}
+
 	public String toString() {
-		return "Project: " + name + " dim: " + dimension + " res: " + resolution;
+		String p = "Project: " + name + " <dim>: " + dimension + " <res>: " + resolution;
+		if (stacks.size() == 0) {
+			return p + "\n\tNo stacks";
+		} else {
+			for (s : stacks) {
+				p = p + "\n\t" + s;
+			}
+			return p;
+		}
 	}
 }
 
@@ -123,30 +198,15 @@ public class TilingJob {
 				this.originalProjectFileContent += strLine + "\n";
 			}
 			iin.close();
+			this.project = new Project( originalProjectFileContent );
 		} else {
 			IJ.log("Info file (" + projectFileName + ") not found");
 		}
-		// parse the contents for project information
-		d = originalProjectFileContent;
-		pName = stripQuotes( getYamlMappingData( d, "project", "name", "" ) );
-		pDim = stripQuotes( getYamlMappingData( d, "project", "dimension", "" ) );
-		pRes = stripQuotes( getYamlMappingData( d, "project", "resolution", "" ) );
-		this.project = new Project( pName, pDim, pRes );
 	}
-}
 
-/**
- * Parses the data to find a simple YAML structure.
- */
-String getYamlMappingData( String data, String parent, String child, String defaultValue ) {
-	String regex = parent + ":(?:\\s*\\n)+(?:^\\s+.*\\n)*(?:^\\s+" + child + ":\\s*(.*)$)";
-	Pattern p = Pattern.compile( regex, Pattern.MULTILINE | Pattern.UNIX_LINES );
-	Matcher m = p.matcher( data );
-	// if group 1 is't available, we did not find what we were looking for
-	if (!m.find() || m.groupCount() == 0)
-		return defaultValue;
-	else
-		return m.group(1);
+	public String toString() {
+		return "TilingJob: " + project;
+	}
 }
 
 /**
@@ -823,8 +883,11 @@ for (int i; i < bsh.args.length; i++) {
 // parse arguments and create jobs
 setup( options );
 files = getInputFiles( inputFile );
-for (String f : files)
-	jobPool.jobs.add( new TilingJob( f ) );
+for (String f : files) {
+	j = new TilingJob( f );
+	jobPool.jobs.add( j );
+	System.out.println( "Added new job: " + j );
+}
 // start tile creation
 work( jobPool );
 // end
