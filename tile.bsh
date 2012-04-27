@@ -171,11 +171,11 @@ public class TilingJob {
 	public Project project;
 	public String projectFileName = "project.yaml";
 	protected String originalProjectFileContent = "";
-	public String rawImage;
+	public String imagePath;
 	public String outputDir;
 
 	public TilingJob ( String imagePath ) {
-		this.rawImage = imagePath;
+		this.imagePath = imagePath;
 		setup( imagePath );
 	}
 
