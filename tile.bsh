@@ -451,17 +451,25 @@ String getChannelName(num, postfix) {
 	return "-ch" + num + postfix + ".tif";
 }
 
-ImageInfo preProcess(imgFileName, wantedChannels, colors) {
+/**
+ * Pre-process an image by creating an image for eack stack of the
+ * project. The project structure is then filled with information
+ * where these images can be found.
+ */
+ImageInfo preProcess( imgFileName, colors, project ) {
 	// Make sure we only ask for channels that are available
-	metadata = getMetaData( imgFileName );
-	availableChannels = metadata.getChannelCount(0);
 	channels = new ArrayList();
-	for (int i=0; i<wantedChannels.size(); ++i) {
-		ch = wantedChannels.get(i);
-		if (ch <= availableChannels) {
-			channels.add(ch);
-		} else {
-			IJ.log("Dropping request for channel " + ch + " as it is not available.");
+	metadata = getMetaData( imgFileName );
+	numAvailableChannels = metadata.getChannelCount(0);
+	// finds the numbers in structures like ch1, ch3+ch2, etc.
+	for ( stack : project.stacks ) {
+		// channels are one-based
+		for ( ch : stack.neededChannels ) {
+			if ( ch > numAvailableChannels ) {
+				IJ.log("Dropping request for channel " + ch + " as it is not available in source image.");
+			} else {
+				channels.add(ch);
+			}
 		}
 	}
 
@@ -614,11 +622,6 @@ ArrayList getInputFiles( path )
 	return files;
 }
 
-void processJob( job ) {
-	IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
-
-}
-
 void work( pool ) {
 	// make sure we got a job
 	if ( pool == null )
@@ -628,82 +631,17 @@ void work( pool ) {
 	} else {
 		// work serially on the jobs
 		for (job : pool.jobs) {
-			processJob( job );
-		}
-		return;
+			IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
 
-		if (useGeneratedInfo)
-			IJ.log("Will generate meta data");
-		// look for names
-		names = new ArrayList();
-		if (useGeneratedInfo) {
-			nf = new File("names.txt");
-			if (nf.exists()) {
-				// read in name definitions from file
-				fstream = new FileInputStream(nf);
-				in = new DataInputStream(fstream);
-				br = new BufferedReader(new InputStreamReader(in));
-				String strLine;
-				while ((strLine = br.readLine()) != null) {
-					names.add(strLine);
-				}
-				in.close();
-			} else {
-				IJ.log("No name file found (names.txt)");
-				return;
-			}
-		}
-		try {
-			// create a new tiling job for every image
+			if (useGeneratedInfo)
+				IJ.log("Will generate meta data");
 
-			namedImages = new ArrayList();
-			if (useGeneratedInfo) {
-				// check if every file has a name
-				if (pool.jobs.size() != names.size()) {
-					IJ.log("The number of names differs from the number of files");
-					return;
-				}
-				for (i=0; i<pool.jobs.size(); ++i) {
-					namedImages.add(new NamedImage(pool.jobs.get(i).rawImage, names.get(i)));
-				}
-			} else {
-				for (i=0; i<pool.jobs.size(); ++i) {
-					namedImages.add(new NamedImage(pool.jobs.get(i).rawImage, "No Name"));
-				}
-			}
-			// Open every image, reset the dynamic range,
-			// create a composite and all single channel images,
-			// save them and then tile them
-			for(ni : namedImages) {
-				// prepare image info
-				info = "";
-				infoAvailable = false;
-				if (useGeneratedInfo) {
-					info = imageInfo.info;
-					// append a name
-					info += "name: " + ni.name;
-					infoAvailable = true;
-				} else {
-					// look for project file
-					infoFile = new File(originalDir + "/" + infoFileName);
-					infoAvailable = infoFile.exists();
-					if (infoAvailable) {
-						IJ.log("Info file (" + infoFileName + ") found");
-						// read in info file
-						ifstream = new FileInputStream(infoFile);
-						iin = new DataInputStream(ifstream);
-						ibr = new BufferedReader(new InputStreamReader(iin));
-						String strLine;
-						while ((strLine = ibr.readLine()) != null) {
-							info += strLine + "\n";
-						}
-						iin.close();
-					} else {
-						IJ.log("Info file (" + infoFileName + ") not found");
-					}
-				}
+			try {
+				// Open every image, reset the dynamic range,
+				// create a composite and all single channel images,
+				// save them and then tile them
 
-				imageInfo = preProcess(ni.path, channels, colors, project);
+				imageInfo = preProcess( job.imagePath, colors, project);
 				originalImg = new File(ni.path);
 				originalDir = originalImg.getParent();
 
@@ -746,10 +684,10 @@ void work( pool ) {
 					// finally remove the image
 					imgFile.delete();
 				}
+			} catch (e) {
+				System.err.println("Error: " + e.getMessage());
+				e.printStackTrace();
 			}
-		} catch (e) {
-			System.err.println("Error: " + e.getMessage());
-			e.printStackTrace();
 		}
 	}
 }
@@ -790,6 +728,7 @@ void setup( options ) {
 		channels.add(5);
 		numChannels = channels.size();
 	}
+	IJ.log( "! Currently onl the project definition is used !" );
 
 	// channel colors
 	colors = new ArrayList();
