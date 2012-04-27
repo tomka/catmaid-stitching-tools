@@ -77,12 +77,21 @@ public class Stack {
 	public String type;
 	public String metadata;
 	public ImageInfo info;
+	public ArrayList neededChannels;
 
 	public Stack( String folder, String name, String type, String meta ) {
 		this.folder = folder;
 		this.name = name;
 		this.type = type;
 		this.metadata = meta;
+		// parse the channels needed by this stack
+		String chIdPatthern = "ch(\\d+)*"
+		Pattern p = Pattern.compile( regex );
+		Matcher m = p.matcher( this.type );
+		this.neededChannels = new ArrayList();
+		while ( m.find() ) {
+			neededChannels.add( Integer.parseInt( m.group(1) ) );
+		}
 	}
 
 	public String toString() {
@@ -147,15 +156,6 @@ public class Project {
 			}
 			return p;
 		}
-	}
-}
-
-public class NamedImage {
-	String path;
-	String name;
-	public NamedImage(String path, String name) {
-		this.path = path;
-		this.name = name;
 	}
 }
 
