@@ -4,6 +4,7 @@ import ij.process.*;
 
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+import java.lang.IllegalStateException;
 
 import loci.plugins.util.*;
 import loci.formats.*;
@@ -14,18 +15,16 @@ import java.util.HashMap;
 import java.util.ArrayList;
 import mpicbg.ij.integral.*;
 
+final String fileSeperator = System.getProperty("file.separator");
+
 int tileSize = 256;
 int thumbnailSize = 192;
 //int numScaleLevels = -1; // ...compute from image height
 int numScaleLevels = 4;
 String overviewName = "small";
-float unitConvFactor = 1000.0;
-int maxValue = 4095;
 String inputFile = "totile.txt";
-String stackDirName = null;
 boolean useGeneratedInfo = false;
 boolean createZProjections = false;
-boolean grayscaleSingleChannels = false;
 ArrayList channels, colors, names;
 ImagePlus imp = null;
 
@@ -68,12 +67,20 @@ String getYamlMappingData( String data, String parent, String child, String defa
 		return m.group(1);
 }
 
+public class StackType {
+	public static String SingleChannel = "singlechannel";
+	public static String SingleChannelZProjection = "singlechannel-zproj";
+	public static String Composite = "composite";
+	public static String CompositeZProjection = "composite-zproj";
+}
+
 /**
  * One stack of tiled images.
  */
 public class Stack {
 	public String folder;
 	public String name;
+	public String rawType;
 	public String type;
 	public String metadata;
 	public ImageInfo info;
@@ -82,16 +89,26 @@ public class Stack {
 	public Stack( String folder, String name, String type, String meta ) {
 		this.folder = folder;
 		this.name = name;
-		this.type = type;
+		this.rawType = type;
 		this.metadata = meta;
 		// parse the channels needed by this stack
-		String chIdPatthern = "ch(\\d+)*"
-		Pattern p = Pattern.compile( regex );
-		Matcher m = p.matcher( this.type );
+		String chIdPattern = "ch(\\d+)*";
+		Pattern p = Pattern.compile( chIdPattern );
+		Matcher m = p.matcher( rawType );
 		this.neededChannels = new ArrayList();
 		while ( m.find() ) {
 			neededChannels.add( Integer.parseInt( m.group(1) ) );
 		}
+		boolean zProj = rawType.indexOf("zproj") != -1;
+		boolean composite = neededChannels.size() > 1;
+		if ( !composite && !zProj )
+			this.type = StackType.SingleChannel;
+		else if ( !composite && zProj )
+			this.type = StackType.SingleChannelZProjection;
+		else if ( composite && !zProj )
+			this.type = StackType.Composite;
+		else if ( composite && zProj )
+			this.type = StackType.CompositeZProjection;
 	}
 
 	public String toString() {
@@ -122,7 +139,7 @@ public class Project {
 	 * Parse data for project information, expect it to be in
      * a YAML like format.
      */
-	protected fromYamlContent( String data ) {
+	protected void fromYamlContent( String data ) {
 		// look for project specification
 		this.name= stripQuotes( getYamlMappingData( data, "project", "name", "" ) );
 		this.dimension = stripQuotes( getYamlMappingData( data, "project", "dimension", "" ) );
@@ -139,11 +156,22 @@ public class Project {
 			// create and store new stack
 			stacks.add( new Stack( sFolder, sName, sType, sMeta ) );
 		}
-	// if group 1 is't available, we did not find what we were looking for
-	if (!m.find() || m.groupCount() == 0)
-		return defaultValue;
-	else
-		return m.group(1);
+		// if group 1 is't available, we did not find what we were looking for
+		if (!m.find() || m.groupCount() == 0)
+			return defaultValue;
+		else
+			return m.group(1);
+	}
+
+	public ArrayList getNeededChannels() {
+		ArrayList neededChannels = new ArrayList();
+		for ( s : this.stacks ) {
+			for ( ch : s.neededChannels ) {
+				if ( !neededChannels.contains( ch ) )
+					neededChannels.add( ch );
+			}
+		}
+		return neededChannels;
 	}
 
 	public String toString() {
@@ -173,10 +201,71 @@ public class TilingJob {
 	protected String originalProjectFileContent = "";
 	public String imagePath;
 	public String outputDir;
+	public ArrayList colors;
+	public float unitConvFactor;
+	public int maxValue;
+	public boolean grayscaleSingleChannels;
 
-	public TilingJob ( String imagePath ) {
+	public TilingJob ( String imagePath, colors, outputDir, unitConvFactor, maxValue, grayscaleSingleChannels ) {
 		this.imagePath = imagePath;
+		this.colors = colors;
+		this.outputDir = outputDir;
+		this.unitConvFactor = unitConvFactor;
+		this.maxValue = maxValue;
+		this.grayscaleSingleChannels = grayscaleSingleChannels;
+
 		setup( imagePath );
+
+		if ( !sanityCheck( true ) )
+			throw new IllegalStateException( "Sanity check of new project not passed" );
+	}
+
+	protected boolean sanityCheck( correct_when_possible ) {
+		// check if enough colors are available
+		numChannels = project.getNeededChannels().size();
+		if (numChannels > this.colors.size()) {
+			IJ.log("Got only " + colors.length() + " colors, but would need " + numChannels);
+			return false;
+		}
+		// Make sure we only ask for channels that are available
+		metadata = getMetaData( imagePath );
+		numAvailableChannels = metadata.getChannelCount(0);
+		stacksToRemove = new ArrayList();
+		for ( s : project.stacks ) {
+			channelsToRemove = new ArrayList();
+			// look for channels that are not valid
+			for ( ch : s.neededChannels ) {
+				if ( ch > numAvailableChannels ) {
+					if (!correct_when_possible)
+						return false;
+					IJ.log("Stack: " + s.name + " -- dropping request for channel " + ch + " as it is not available in source image.");
+					channelsToRemove.add( ch );	
+				}
+			}
+			// remove dropped channels
+			for (ch : channelsToRemove)
+				s.neededChannels.remove( ch );
+
+			if ( s.neededChannels.size() == 0 )
+				stacksToRemole.add( s );
+		}
+		// remove empty stacks
+		for ( s : stacksToRemove )
+			project.stacks.remove( s );
+
+		// finds the numbers in structures like ch1, ch3+ch2, etc.
+		neededChannels = project.getNeededChannels();
+		channels = new ArrayList();
+		for ( ch : neededChannels ) {
+			// channels are one-based
+			if ( ch > numAvailableChannels ) {
+				IJ.log("Dropping request for channel " + ch + " as it is not available in source image.");
+			} else {
+				channels.add(ch);
+			}
+		}
+
+		return true;
 	}
 
 	protected setup( String imagePath ) {
@@ -456,119 +545,139 @@ String getChannelName(num, postfix) {
  * project. The project structure is then filled with information
  * where these images can be found.
  */
-ImageInfo preProcess( imgFileName, colors, project ) {
-	// Make sure we only ask for channels that are available
-	channels = new ArrayList();
-	metadata = getMetaData( imgFileName );
-	numAvailableChannels = metadata.getChannelCount(0);
-	// finds the numbers in structures like ch1, ch3+ch2, etc.
-	for ( stack : project.stacks ) {
-		// channels are one-based
-		for ( ch : stack.neededChannels ) {
-			if ( ch > numAvailableChannels ) {
-				IJ.log("Dropping request for channel " + ch + " as it is not available in source image.");
-			} else {
-				channels.add(ch);
-			}
-		}
-	}
-
+ImageInfo preProcess( job ) {
 	returnList = new ArrayList();
-	// check if enough colors are available
-	numChannels = channels.size();
-	if (numChannels > colors.size()) {
-		IJ.log("Got only " + colors.length() + " colors, but would need " + numChannels);
-		return null;
-	}
 	// remove the extension from the file name
-	imgFileNameBase = imgFileName.substring(0, imgFileName.lastIndexOf('.'));
-	// create names for different channels
-	compositeName = imgFileNameBase + "-composite.tif";
+	imgPath = new File( job.imagePath );
+	imgFile = imgPath.getName();
+	imgFileNameBase = imgFile.substring(0, imgFile.lastIndexOf('.'));
 
-	IJ.log("Preprocessing image " + imgFileName);
+	IJ.log("Preprocessing image " + job.imagePath);
 	macro = "setBatchMode(true);\n"
-		+"run(\"Bio-Formats\", \"open=[" + imgFileName + "] view=Hyperstack stack_order=XYCZT display_metadata=false\");\n"
+		+"run(\"Bio-Formats\", \"open=[" + job.imagePath + "] view=Hyperstack stack_order=XYCZT display_metadata=false\");\n"
+		+"originalImageID = getImageID();\n"
 		+"Stack.setDisplayMode(\"color\");\n"
-		+"Stack.getDimensions(width, height, channels, slices, frames);\n";
-		//+"open(\"" + imgFileName + "\");\n";
-	if (useGeneratedInfo) {
+		+"Stack.getDimensions(width, height, channels, slices, frames);\n"
 		// get dimension and resolution info
-		macro += "getPixelSize(unit, pw, ph, pd);\n"
-			+"factor = " + unitConvFactor + ";\n"
-			+"dimStr = \"dimension: (\" + width + \",\" + height + \",\" + slices + \")\";\n"
-			+"resStr = \"resolution: (\" + pw*factor + \",\" + ph*factor + \",\" + pd*factor + \")\";\n"
-			+"infoStr = dimStr + \"\\n\" + resStr + \"\\n\";\n";
+		+"getPixelSize(unit, pw, ph, pd);\n"
+		+"factor = " + job.unitConvFactor + ";\n"
+		+"dimStr = \"dimension: (\" + width + \",\" + height + \",\" + slices + \")\";\n"
+		+"resStr = \"resolution: (\" + pw*factor + \",\" + ph*factor + \",\" + pd*factor + \")\";\n"
+		+"infoStr = dimStr + \"\\n\" + resStr + \"\\n\";\n";
+
+	/* For better performance we first process all composite stacks.
+	 * After that the single channel requests will be worked on.
+	 */
+
+	compositeRequests = new ArrayList();
+	for ( stack : job.project.stacks ) {
+		if ( stack.type == StackType.Composite || stack.type == StackType.CompositeZProjection )
+			compositeRequests.add( stack );
 	}
 
-	macro += "wantedChannels = newArray(channels);\n"
-		+"Array.fill(wantedChannels, 0);\n";
-
-	// prepare channels
-	for (int i=0; i<numChannels; ++i) {
-		ch = channels.get(i);
-		macro += "if (" + ch + " <= channels) {"
-			+" Stack.setChannel(" + ch  + ");\n"
-			+" setMinAndMax(0, " + maxValue + ");\n"
-			+" run(\"" + colors.get(i) + "\");\n"
-			+" wantedChannels[" + (ch - 1) + "]=1;\n"
-			+"}";
+	singleChannelRequests = new ArrayList();
+	for ( stack : job.project.stacks ) {
+		if ( stack.type == StackType.SingleChannel || stack.type == StackType.SingleChannelZProjection )
+			singleChannelRequests.add( stack );
 	}
 
-	// create a string describing which channels to use
-	macro += "activeChannels = \"\";\n"
-		+"for (i=0; i<channels; i++) {\n"
-		+"  activeChannels = activeChannels + wantedChannels[i];\n"
-		+"}";
+	macro += "wantedChannels = newArray(channels);\n";
 
-	// create composite
-	// Make only the channels active that we want
-	macro += "Stack.setDisplayMode(\"composite\");\n"
-		+"Stack.setActiveChannels(activeChannels);\n"
-		+"run(\"Stack to RGB\", \"slices keep\");\n"
-		+"saveAs(\"Tiff\", \"" + compositeName + "\");\n";
-	returnList.add(compositeName);
-	if (createZProjections) {
-		fileName = imgFileNameBase + "-composite_zproj.tif";
-		returnList.add(fileName);
-		macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
-			+"saveAs(\"Tiff\", \"" + fileName + "\");\n"
-			+"close();\n";
-	}
-	// close the RGB image
-	macro += "close();\n";
-
-	macro += "run(\"Split Channels\");\n";
-
-	// create single channels
-	macro += "channelNames = newArray(channels);\n";
-	macro += "channelNamesZProj = newArray(channels);\n";
-	for (int i=0; i<numChannels; ++i) {
-		// save the channels in reverse
-		ch = channels.get(i);
-		chName = imgFileNameBase + getChannelName(ch, "");
-		returnList.add(chName);
-		macro += "channelNames[" + (ch - 1) + "] = \"" + chName + "\";\n";
-		if (createZProjections) {
-			chName = imgFileNameBase + getChannelName(ch, "_zproj");
-			returnList.add(chName);
-			macro += "channelNamesZProj[" + (ch - 1) + "] = \"" + chName + "\";\n";
+	// iterate over the composite requests
+	for ( stack : compositeRequests ) {
+		// reset wanted channels
+		macro += "Array.fill(wantedChannels, 0);\n";
+		// set only those channels active, that are needed for this stack
+		int numChannels = stack.neededChannels.size();
+		for (int i=0; i<numChannels; ++i) {
+			ch = stack.neededChannels.get(i).intValue();
+			macro += "if (" + ch + " <= channels) {"
+				+" Stack.setChannel(" + ch  + ");\n"
+				+" setMinAndMax(0, " + job.maxValue + ");\n"
+				+" run(\"" + job.colors.get( ch ) + "\");\n"
+				+" wantedChannels[" + (ch - 1) + "]=1;\n"
+				+"}";
 		}
+
+		// create a string describing which channels to use
+		macro += "activeChannels = \"\";\n"
+			+"for (i=0; i<channels; i++) {\n"
+			+"  activeChannels = activeChannels + wantedChannels[i];\n"
+			+"}";
+
+		// Make only the channels active that we want
+		macro += "Stack.setDisplayMode(\"composite\");\n"
+			+"Stack.setActiveChannels(activeChannels);\n"
+			+"run(\"Stack to RGB\", \"slices keep\");\n";
+
+		if ( stack.type == StackType.Composite )
+		{
+			fileName = imgFileNameBase + "-composite.tif";
+			macro += "saveAs(\"Tiff\", \"" + fileName + "\");\n";
+			returnList.add( fileName );
+		}
+		else
+		{
+			fileName = imgFileNameBase + "-composite_zproj.tif";
+			macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
+				+"saveAs(\"Tiff\", \"" + fileName + "\");\n"
+				+"close();\n";
+			returnList.add( fileName );
+		}
+
+		// close the RGB image
+		macro += "close();\n";
 	}
 
+	// split the image into its channels and find out their IDs
+	macro += "run(\"Split Channels\");\n"
+			+"channelIDs = newArray( channels );\n"
+			+"nChannelsFound = 0;\n"
+			+"for (i=0; i<channels; i++) {\n"
+			+"  n = i + 1;\n"
+			+"  selectImage( n );\n"
+			+"  id = getImageID();\n"
+			+"  if (id!=originalImageID) {\n"
+			+"    channelIDs[ nChannelsFound ] = id;\n"
+			+"    nChannelsFound++;\n"
+			+"  }\n"
+			+"}\n";
+
+	// make the splitted channels 8bit and apply gray scale if wanted
 	macro += "for (i=0; i<channels; i++) {\n"
-		+"  ch = channels - i - 1;\n"
-		+"  if (wantedChannels[ch]==1) {\n"
-		+"    run(\"8-bit\");\n";
-	if (grayscaleSingleChannels)
-		macro += "    run(\"Grays\");\n";
-	macro += "    saveAs(\"Tiff\", channelNames[ch]);\n";
-	if (createZProjections) {
-		macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
-			   + "saveAs(\"Tiff\", channelNamesZProj[ch]);\n";
+			+"  selectImage( channelIDs[i] );\n"
+			+"  run(\"8-bit\");\n";
+	if (job.grayscaleSingleChannels)
+		macro += "  run(\"Grays\");\n";
+	macro += "};";
+
+	// iterate over the single image jobs
+	for ( stack : singleChannelRequests ) {
+		ch = stack.neededChannels.get(0).intValue();
+		// select the wanted channel, keep in mind that channels are one-based
+		macro += "selectImage( channelIDs[" + (ch - 1) + "] );\n";
+		// create a name for this channel
+		chName = "";
+		if (stack.type == StackType.SingleChannel)
+		{
+			chName = imgFileNameBase + getChannelName(ch, "");
+			macro += "saveAs(\"Tiff\", \"" + chName + "\");\n";
+		}
+		else
+		{
+			chName = imgFileNameBase + getChannelName(ch, "_zproj");
+			macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
+					+"saveAs(\"Tiff\", \"" + chName + "\");\n"
+					+"close();\n";
+		}
+		returnList.add(chName);
 	}
-	macro +="  }\n"
-		+"  close();\n"
-		+"}\n";
+
+	// close all images
+	macro += "for (i=0; i<channels; i++) {\n"
+			+"  selectImage( channelIDs[i] );\n"
+			+"  close();\n"
+			+"}\n";
 
 	if (useGeneratedInfo)
 		macro += "return infoStr;\n";
@@ -631,29 +740,31 @@ void work( pool ) {
 	} else {
 		// work serially on the jobs
 		for (job : pool.jobs) {
-			IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + maxValue);
+			IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + job.maxValue);
 
 			if (useGeneratedInfo)
 				IJ.log("Will generate meta data");
 
 			try {
-				// Open every image, reset the dynamic range,
-				// create a composite and all single channel images,
-				// save them and then tile them
+				/* Pre processing: Open every image, reset the dynamic
+				 * range, create a composite and all single channel
+				 * images, save them and then tile them
+				 */
+				imageInfo = preProcess( job );
 
-				imageInfo = preProcess( job.imagePath, colors, project);
-				originalImg = new File(ni.path);
+				// Path information about the input data
+				originalImg = new File( job.imagePath );
 				originalDir = originalImg.getParent();
 
 				// create output folder
 				originalImageName = originalImg.getName().substring( 0, originalImg.getName().lastIndexOf('.') );
-				outputBase = stackDirName + originalImageName + "/";
+				outputBase = job.outputDir + originalImageName + "/";
 				outputDir = new File( outputBase );
 				// Check if the folder already exists. If so, add a counter.
 				counter = 2;
 				while ( outputDir.exists() ) {
 					// rename the output folder from output to output_2
-					outputBase = stackDirName + originalImageName + "_" + counter + "/";
+					outputBase = job.outputDir + originalImageName + "_" + counter + "/";
 					outputDir = new File( outputBase );
 					counter++;
 				}
@@ -691,6 +802,11 @@ void work( pool ) {
 		}
 	}
 }
+
+String stackDirName = null;
+float unitConvFactor = 1000.0;
+int maxValue = 4095;
+boolean grayscaleSingleChannels = true;
 
 void setup( options ) {
 	// check what options are available
@@ -823,7 +939,7 @@ for (int i; i < bsh.args.length; i++) {
 setup( options );
 files = getInputFiles( inputFile );
 for (String f : files) {
-	j = new TilingJob( f );
+	j = new TilingJob( f, colors, stackDirName, unitConvFactor, maxValue, grayscaleSingleChannels );
 	jobPool.jobs.add( j );
 	System.out.println( "Added new job: " + j );
 }
