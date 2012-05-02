@@ -85,6 +85,8 @@ public class Stack {
 	public String metadata;
 	public ImageInfo info;
 	public ArrayList neededChannels;
+	// Path to an image that represents this stack
+	public String imagePath = null;
 
 	public Stack( String folder, String name, String type, String meta ) {
 		this.folder = folder;
@@ -124,15 +126,18 @@ public class Project {
 	public String dimension;
 	public String resolution;
 	public ArrayList stacks;
+	public String yamlData;
 
 	public Project( String name, String dim, String res ) {
 		this.name = name;
 		this.dimension = dim;
 		this.resolution = res;
+		this.yamlData = "";
 	}
 
 	public Project( String yamlData ) {
 		this.fromYamlContent( yamlData );
+		this.yamlData = yamlData;
 	}
 
 	/**
@@ -197,7 +202,7 @@ public class TilingJobPool {
 
 public class TilingJob {
 	public Project project;
-	public String projectFileName = "project.yaml";
+	public String projectFileName;
 	protected String originalProjectFileContent = "";
 	public String imagePath;
 	public String outputDir;
@@ -205,9 +210,11 @@ public class TilingJob {
 	public float unitConvFactor;
 	public int maxValue;
 	public boolean grayscaleSingleChannels;
+	public boolean projectFileAvailable;
 
-	public TilingJob ( String imagePath, colors, outputDir, unitConvFactor, maxValue, grayscaleSingleChannels ) {
+	public TilingJob ( String imagePath, projectFileName, colors, outputDir, unitConvFactor, maxValue, grayscaleSingleChannels ) {
 		this.imagePath = imagePath;
+		this.projectFileName = projectFileName;
 		this.colors = colors;
 		this.outputDir = outputDir;
 		this.unitConvFactor = unitConvFactor;
@@ -272,14 +279,14 @@ public class TilingJob {
 		originalImg = new File( imagePath );
 		originalDir = originalImg.getParent();
 		// look for project file
-		infoFile = new File(originalDir + "/" + projectFileName);
-		infoAvailable = infoFile.exists();
+		projectFile = new File(originalDir + "/" + projectFileName);
+		this.projectFileAvailable = projectFile.exists();
 		originalProjectFileContent = "";
 		// read it in if present
-		if (infoAvailable) {
+		if (this.projectFileAvailable) {
 			IJ.log("Info file (" + projectFileName + ") found");
 			// read in info file
-			ifstream = new FileInputStream(infoFile);
+			ifstream = new FileInputStream(projectFile);
 			iin = new DataInputStream(ifstream);
 			ibr = new BufferedReader(new InputStreamReader(iin));
 			String strLine;
@@ -610,11 +617,11 @@ ImageInfo preProcess( job ) {
 			+"Stack.setActiveChannels(activeChannels);\n"
 			+"run(\"Stack to RGB\", \"slices keep\");\n";
 
+		fileName = "";
 		if ( stack.type == StackType.Composite )
 		{
 			fileName = imgFileNameBase + "-composite.tif";
 			macro += "saveAs(\"Tiff\", \"" + fileName + "\");\n";
-			returnList.add( fileName );
 		}
 		else
 		{
@@ -622,8 +629,9 @@ ImageInfo preProcess( job ) {
 			macro += "run(\"Z Project...\", \"start=1 stop=\" + slices + \" projection=[Average Intensity]\");\n"
 				+"saveAs(\"Tiff\", \"" + fileName + "\");\n"
 				+"close();\n";
-			returnList.add( fileName );
 		}
+		stack.imagePath = fileName;
+		returnList.add( fileName );
 
 		// close the RGB image
 		macro += "close();\n";
@@ -670,6 +678,7 @@ ImageInfo preProcess( job ) {
 					+"saveAs(\"Tiff\", \"" + chName + "\");\n"
 					+"close();\n";
 		}
+		stack.imagePath = chName;
 		returnList.add(chName);
 	}
 
@@ -761,39 +770,43 @@ void work( pool ) {
 				outputBase = job.outputDir + originalImageName + "/";
 				outputDir = new File( outputBase );
 				// Check if the folder already exists. If so, add a counter.
-				counter = 2;
+				counter = 1;
 				while ( outputDir.exists() ) {
+					counter++;
 					// rename the output folder from output to output_2
 					outputBase = job.outputDir + originalImageName + "_" + counter + "/";
 					outputDir = new File( outputBase );
-					counter++;
 				}
 				outputDir.mkdirs();
 
 				// tile all the images
-				for (i : imageInfo.images) {
-					imgFile = new File(i);
+				for ( stack : job.project.stacks ) {
+					imgFile = new File( stack.imagePath );
 					// cut away the file extension
 					imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
 					// cut away the channel information
 					imgDirName = outputBase + imgBaseName + "/";
 					imgDir = new File(imgDirName);
+					// temporary change the output dir to the one of the stack
+					originalOutputDir = job.outputDir;
 					job.outputDir = imgDirName;
 					IJ.log("Using output dir: " + imgDirName);
 					// create folder for the new tiles
 					imgDir.mkdirs();
 					// tile the image
-					tileSingleImage( job, i );
-					// write out info string
-					if (infoAvailable) {
-						File outputFile = new File(outputBase + "/" + infoFileName);
-						FileWriter out = new FileWriter(outputFile);
-						BufferedWriter bout = new BufferedWriter(out);
-						bout.write(info);
-						bout.close();
-					}
+					tileSingleImage( job, stack.imagePath );
+					job.outputDir = originalOutputDir;
 					// finally remove the image
 					imgFile.delete();
+				}
+
+				// write out info string
+				if (job.projectFileAvailable) {
+					File outputFile = new File(outputBase + "/" + job.projectFileName);
+					FileWriter out = new FileWriter(outputFile);
+					BufferedWriter bout = new BufferedWriter(out);
+					bout.write(job.project.yamlData);
+					bout.close();
 				}
 			} catch (e) {
 				System.err.println("Error: " + e.getMessage());
@@ -804,6 +817,7 @@ void work( pool ) {
 }
 
 String stackDirName = null;
+String projectFileName = "";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
 boolean grayscaleSingleChannels = true;
@@ -895,9 +909,9 @@ void setup( options ) {
 
 	// info file name -- default: project.yaml
 	if ( options.containsKey( "-info-file" ) ) {
-		infoFileName = options.get( "-info-file" );
+		projectFileName = options.get( "-info-file" );
 	} else {
-		infoFileName = "project.yaml";
+		projectFileName = "project.yaml";
 	}
 }
 
@@ -939,7 +953,7 @@ for (int i; i < bsh.args.length; i++) {
 setup( options );
 files = getInputFiles( inputFile );
 for (String f : files) {
-	j = new TilingJob( f, colors, stackDirName, unitConvFactor, maxValue, grayscaleSingleChannels );
+	j = new TilingJob( f, projectFileName, colors, stackDirName, unitConvFactor, maxValue, grayscaleSingleChannels );
 	jobPool.jobs.add( j );
 	System.out.println( "Added new job: " + j );
 }
