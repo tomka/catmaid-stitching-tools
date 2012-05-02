@@ -220,13 +220,12 @@ public class TilingJob {
 		this.imagePath = imagePath;
 		this.projectFileName = projectFileName;
 		this.colors = colors;
-		this.outputDir = outputDir;
 		this.unitConvFactor = unitConvFactor;
 		this.maxValue = maxValue;
 		this.grayscaleSingleChannels = grayscaleSingleChannels;
 		this.useGeneratedInfo = useGeneratedInfo;
 
-		setup( imagePath );
+		setup( imagePath, outputDir );
 
 		if ( !sanityCheck( true ) )
 			throw new IllegalStateException( "Sanity check of new project not passed" );
@@ -280,11 +279,28 @@ public class TilingJob {
 		return true;
 	}
 
-	protected setup( String imagePath ) {
+	protected setup( String imagePath, String generalOutputDir ) {
+		// Path information about the input data
 		originalImg = new File( imagePath );
-		originalDir = originalImg.getParent();
+		// create output folder
+		originalImageName = originalImg.getName().substring( 0, originalImg.getName().lastIndexOf('.') );
+		potentialOutputBase = generalOutputDir + originalImageName + "/";
+		potentialOutputDir = new File( potentialOutputBase );
+		// Check if the folder already exists. If so, add a counter.
+		counter = 1;
+		while ( potentialOutputDir.exists() ) {
+			counter++;
+			// rename the output folder from output to output_2
+			potentialOutputBase = generalOutputDir + originalImageName + "_" + counter + "/";
+			potentialOutputDir = new File( potentialOutputBase );
+		}
+		potentialOutputDir.mkdirs();
+		// remember the last try as output path
+		this.outputDir = potentialOutputBase;
+
 		// look for project file
-		projectFile = new File(originalDir + "/" + projectFileName);
+		originalImgDir = originalImg.getParent();
+		projectFile = new File(originalImgDir + "/" + projectFileName);
 		this.projectFileAvailable = projectFile.exists();
 		originalProjectFileContent = "";
 		// read it in if present
@@ -451,7 +467,7 @@ int getNumScaleLevels( int height, int tileSize )
 		return (int) s + 1;
 }
 
-void createTiles( job, imp ) {
+void createTiles( job, stack, imp, stackDir ) {
 	int numSlices = imp.getNSlices();
 	int tileWidth = tileSize;
 	int tileHeight = tileSize;
@@ -482,7 +498,7 @@ void createTiles( job, imp ) {
 			if ( height > rows * tileHeight )
 				++rows;
 			
-			sliceDirName = job.outputDir + "/" + sliceIndex;
+			sliceDirName = stackDir + "/" +  sliceIndex;
 
 			// create tiles
 			for ( int tileIndexY = 0; tileIndexY < rows; ++tileIndexY )
@@ -545,7 +561,16 @@ void tileSingleImage( job, stack ) {
 		IJ.log( "File `" + stack.imagePath + "' could not be opened." );
 		return;
 	}
-	createTiles( job, imp );
+	// cut away the channel information
+	imgDirName = job.outputDir + stack.folder;
+	imgDir = new File(imgDirName);
+	// create folder for the new tiles
+	imgDir.mkdirs();
+	IJ.log("Using output dir: " + imgDirName);
+	createTiles( job, stack, imp, imgDirName );
+	// finally remove the image
+	imgFile = new File( stack.imagePath );
+	imgFile.delete();
 }
 
 String getChannelName(num, postfix) {
@@ -758,48 +783,15 @@ void work( pool ) {
 			 */
 			preProcess( job );
 
-			// Path information about the input data
-			originalImg = new File( job.imagePath );
-			originalDir = originalImg.getParent();
-
-			// create output folder
-			originalImageName = originalImg.getName().substring( 0, originalImg.getName().lastIndexOf('.') );
-			outputBase = job.outputDir + originalImageName + "/";
-			outputDir = new File( outputBase );
-			// Check if the folder already exists. If so, add a counter.
-			counter = 1;
-			while ( outputDir.exists() ) {
-				counter++;
-				// rename the output folder from output to output_2
-				outputBase = job.outputDir + originalImageName + "_" + counter + "/";
-				outputDir = new File( outputBase );
-			}
-			outputDir.mkdirs();
-
 			// tile all the images
 			for ( stack : job.project.stacks ) {
-				imgFile = new File( stack.imagePath );
-				// cut away the file extension
-				imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
-				// cut away the channel information
-				imgDirName = outputBase + imgBaseName + "/";
-				imgDir = new File(imgDirName);
-				// temporary change the output dir to the one of the stack
-				originalOutputDir = job.outputDir;
-				job.outputDir = imgDirName;
-				IJ.log("Using output dir: " + imgDirName);
-				// create folder for the new tiles
-				imgDir.mkdirs();
 				// tile the image
 				tileSingleImage( job, stack );
-				job.outputDir = originalOutputDir;
-				// finally remove the image
-				imgFile.delete();
 			}
 
 			// write out info string
 			if (job.projectFileAvailable) {
-				File outputFile = new File(outputBase + "/" + job.projectFileName);
+				File outputFile = new File(job.outputDir + job.projectFileName);
 				FileWriter out = new FileWriter(outputFile);
 				BufferedWriter bout = new BufferedWriter(out);
 				bout.write(job.project.yamlData);
