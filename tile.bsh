@@ -23,7 +23,6 @@ int thumbnailSize = 192;
 int numScaleLevels = 4;
 String overviewName = "small";
 String inputFile = "totile.txt";
-boolean useGeneratedInfo = false;
 boolean createZProjections = false;
 ArrayList channels, colors, names;
 ImagePlus imp = null;
@@ -211,8 +210,10 @@ public class TilingJob {
 	public int maxValue;
 	public boolean grayscaleSingleChannels;
 	public boolean projectFileAvailable;
+	public String generatedInfo = "";
+	public boolean useGeneratedInfo = false;
 
-	public TilingJob ( String imagePath, projectFileName, colors, outputDir, unitConvFactor, maxValue, grayscaleSingleChannels ) {
+	public TilingJob( String imagePath, projectFileName, colors, outputDir, unitConvFactor, maxValue, grayscaleSingleChannels, useGeneratedInfo ) {
 		this.imagePath = imagePath;
 		this.projectFileName = projectFileName;
 		this.colors = colors;
@@ -220,6 +221,7 @@ public class TilingJob {
 		this.unitConvFactor = unitConvFactor;
 		this.maxValue = maxValue;
 		this.grayscaleSingleChannels = grayscaleSingleChannels;
+		this.useGeneratedInfo = useGeneratedInfo;
 
 		setup( imagePath );
 
@@ -552,8 +554,7 @@ String getChannelName(num, postfix) {
  * project. The project structure is then filled with information
  * where these images can be found.
  */
-ImageInfo preProcess( job ) {
-	returnList = new ArrayList();
+void preProcess( job ) {
 	// remove the extension from the file name
 	imgPath = new File( job.imagePath );
 	imgFile = imgPath.getName();
@@ -631,7 +632,6 @@ ImageInfo preProcess( job ) {
 				+"close();\n";
 		}
 		stack.imagePath = fileName;
-		returnList.add( fileName );
 
 		// close the RGB image
 		macro += "close();\n";
@@ -679,7 +679,6 @@ ImageInfo preProcess( job ) {
 					+"close();\n";
 		}
 		stack.imagePath = chName;
-		returnList.add(chName);
 	}
 
 	// close all images
@@ -688,15 +687,13 @@ ImageInfo preProcess( job ) {
 			+"  close();\n"
 			+"}\n";
 
-	if (useGeneratedInfo)
+	if (job.useGeneratedInfo)
 		macro += "return infoStr;\n";
 
 	output = IJ.runMacro(macro);
-	if (useGeneratedInfo) {
+	if (job.useGeneratedInfo) {
 		IJ.log("Output of macro: " + output);
-		return new ImageInfo(returnList, output);
-	} else {
-		return new ImageInfo(returnList);
+		job.generatedInfo = output;
 	}
 }
 
@@ -751,7 +748,7 @@ void work( pool ) {
 		for (job : pool.jobs) {
 			IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + job.maxValue);
 
-			if (useGeneratedInfo)
+			if (job.useGeneratedInfo)
 				IJ.log("Will generate meta data");
 
 			try {
@@ -759,7 +756,7 @@ void work( pool ) {
 				 * range, create a composite and all single channel
 				 * images, save them and then tile them
 				 */
-				imageInfo = preProcess( job );
+				preProcess( job );
 
 				// Path information about the input data
 				originalImg = new File( job.imagePath );
@@ -821,6 +818,7 @@ String projectFileName = "";
 float unitConvFactor = 1000.0;
 int maxValue = 4095;
 boolean grayscaleSingleChannels = true;
+boolean useGeneratedInfo = false;
 
 void setup( options ) {
 	// check what options are available
@@ -953,7 +951,7 @@ for (int i; i < bsh.args.length; i++) {
 setup( options );
 files = getInputFiles( inputFile );
 for (String f : files) {
-	j = new TilingJob( f, projectFileName, colors, stackDirName, unitConvFactor, maxValue, grayscaleSingleChannels );
+	j = new TilingJob( f, projectFileName, colors, stackDirName, unitConvFactor, maxValue, grayscaleSingleChannels, useGeneratedInfo );
 	jobPool.jobs.add( j );
 	System.out.println( "Added new job: " + j );
 }
