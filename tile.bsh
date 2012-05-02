@@ -740,74 +740,70 @@ void work( pool ) {
 	// make sure we got a job
 	if ( pool == null )
 			throw new IllegalArgumentException( "A pool must not be null" );
-	if ( singleFile != null ) {
-		tileSingleImage( pool.jobs.get(0), singleFile );
-	} else {
-		// work serially on the jobs
-		for (job : pool.jobs) {
-			IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + job.maxValue);
+	// work serially on the jobs
+	for (job : pool.jobs) {
+		IJ.log("Processing tiling job with channels " + channels.toString() + " (or less if less available) of an image with max. value " + job.maxValue);
 
-			if (job.useGeneratedInfo)
-				IJ.log("Will generate meta data");
+		if (job.useGeneratedInfo)
+			IJ.log("Will generate meta data");
 
-			try {
-				/* Pre processing: Open every image, reset the dynamic
-				 * range, create a composite and all single channel
-				 * images, save them and then tile them
-				 */
-				preProcess( job );
+		try {
+			/* Pre processing: Open every image, reset the dynamic
+			 * range, create a composite and all single channel
+			 * images, save them and then tile them
+			 */
+			preProcess( job );
 
-				// Path information about the input data
-				originalImg = new File( job.imagePath );
-				originalDir = originalImg.getParent();
+			// Path information about the input data
+			originalImg = new File( job.imagePath );
+			originalDir = originalImg.getParent();
 
-				// create output folder
-				originalImageName = originalImg.getName().substring( 0, originalImg.getName().lastIndexOf('.') );
-				outputBase = job.outputDir + originalImageName + "/";
+			// create output folder
+			originalImageName = originalImg.getName().substring( 0, originalImg.getName().lastIndexOf('.') );
+			outputBase = job.outputDir + originalImageName + "/";
+			outputDir = new File( outputBase );
+			// Check if the folder already exists. If so, add a counter.
+			counter = 1;
+			while ( outputDir.exists() ) {
+				counter++;
+				// rename the output folder from output to output_2
+				outputBase = job.outputDir + originalImageName + "_" + counter + "/";
 				outputDir = new File( outputBase );
-				// Check if the folder already exists. If so, add a counter.
-				counter = 1;
-				while ( outputDir.exists() ) {
-					counter++;
-					// rename the output folder from output to output_2
-					outputBase = job.outputDir + originalImageName + "_" + counter + "/";
-					outputDir = new File( outputBase );
-				}
-				outputDir.mkdirs();
-
-				// tile all the images
-				for ( stack : job.project.stacks ) {
-					imgFile = new File( stack.imagePath );
-					// cut away the file extension
-					imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
-					// cut away the channel information
-					imgDirName = outputBase + imgBaseName + "/";
-					imgDir = new File(imgDirName);
-					// temporary change the output dir to the one of the stack
-					originalOutputDir = job.outputDir;
-					job.outputDir = imgDirName;
-					IJ.log("Using output dir: " + imgDirName);
-					// create folder for the new tiles
-					imgDir.mkdirs();
-					// tile the image
-					tileSingleImage( job, stack.imagePath );
-					job.outputDir = originalOutputDir;
-					// finally remove the image
-					imgFile.delete();
-				}
-
-				// write out info string
-				if (job.projectFileAvailable) {
-					File outputFile = new File(outputBase + "/" + job.projectFileName);
-					FileWriter out = new FileWriter(outputFile);
-					BufferedWriter bout = new BufferedWriter(out);
-					bout.write(job.project.yamlData);
-					bout.close();
-				}
-			} catch (e) {
-				System.err.println("Error: " + e.getMessage());
-				e.printStackTrace();
 			}
+			outputDir.mkdirs();
+
+			// tile all the images
+			for ( stack : job.project.stacks ) {
+				imgFile = new File( stack.imagePath );
+				// cut away the file extension
+				imgBaseName = imgFile.getName().substring(0, imgFile.getName().lastIndexOf('.'));
+				// cut away the channel information
+				imgDirName = outputBase + imgBaseName + "/";
+				imgDir = new File(imgDirName);
+				// temporary change the output dir to the one of the stack
+				originalOutputDir = job.outputDir;
+				job.outputDir = imgDirName;
+				IJ.log("Using output dir: " + imgDirName);
+				// create folder for the new tiles
+				imgDir.mkdirs();
+				// tile the image
+				tileSingleImage( job, stack.imagePath );
+				job.outputDir = originalOutputDir;
+				// finally remove the image
+				imgFile.delete();
+			}
+
+			// write out info string
+			if (job.projectFileAvailable) {
+				File outputFile = new File(outputBase + "/" + job.projectFileName);
+				FileWriter out = new FileWriter(outputFile);
+				BufferedWriter bout = new BufferedWriter(out);
+				bout.write(job.project.yamlData);
+				bout.close();
+			}
+		} catch (e) {
+			System.err.println("Error: " + e.getMessage());
+			e.printStackTrace();
 		}
 	}
 }
@@ -919,7 +915,6 @@ options = new HashMap();
 
 jobPool = new TilingJobPool();
 
-singleFile = null;
 // CL argument based on: http://stackoverflow.com/questions/7341683
 for (int i; i < bsh.args.length; i++) {
 	switch (bsh.args[i].charAt(0)) {
@@ -939,10 +934,6 @@ for (int i; i < bsh.args.length; i++) {
 				i++;
 			}
 			break;
-
-	default:
-		if (args.length-1 == i)
-			singleFile = bsh.args[ i ];
 	}
 }
 
