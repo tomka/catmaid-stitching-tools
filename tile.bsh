@@ -152,10 +152,14 @@ public class Project {
 		Matcher m = createYamlTreeMatcher( data, "stack" );
 		while ( m.find() ) {
 			String stackData = m.group(0);
-			String sFolder = stripQuotes( getYamlMappingData( stackData, "stack", "folder", "" ) );
-			String sName = stripQuotes( getYamlMappingData( stackData, "stack", "name", "" ) );
 			String sType = stripQuotes( getYamlMappingData( stackData, "stack", "type", "" ) );
+			String sName = stripQuotes( getYamlMappingData( stackData, "stack", "name", "" ) );
 			String sMeta = stripQuotes( getYamlMappingData( stackData, "stack", "metadata", "" ) );
+			if ( sType.equals("") )
+				throw new IllegalArgumentException( "Each stack needs to have a type declaration." );
+			if ( sName.equals("") )
+				throw new IllegalArgumentException( "Each stack needs to have a name declaration." );
+			String sFolder = stripQuotes( getYamlMappingData( stackData, "stack", "folder", this.name + "-" + sType ) );
 			// create and store new stack
 			stacks.add( new Stack( sFolder, sName, sType, sMeta ) );
 		}
