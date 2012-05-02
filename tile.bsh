@@ -25,7 +25,6 @@ String overviewName = "small";
 String inputFile = "totile.txt";
 boolean createZProjections = false;
 ArrayList channels, colors, names;
-ImagePlus imp = null;
 
 public class ImageInfo {
 	public ArrayList images;
@@ -448,7 +447,7 @@ int getNumScaleLevels( int height, int tileSize )
 		return (int) s + 1;
 }
 
-void createTiles( job ) {
+void createTiles( job, imp ) {
 	int numSlices = imp.getNSlices();
 	int tileWidth = tileSize;
 	int tileHeight = tileSize;
@@ -542,7 +541,7 @@ void tileSingleImage( job, imgFileName ) {
 		IJ.log( "File `" + imgFileName + "' could not be opened." );
 		return;
 	}
-	createTiles( job );
+	createTiles( job, imp );
 }
 
 String getChannelName(num, postfix) {
