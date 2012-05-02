@@ -528,17 +528,17 @@ void createTiles( job, imp ) {
 	}
 }
 
-void tileSingleImage( job, imgFileName ) {
-	imgFile = new File( imgFileName );
+void tileSingleImage( job, stack ) {
+	imgFile = new File( stack.imagePath);
 	if ( ! imgFile.exists() || ! imgFile.isFile() )
 	{
-		IJ.log( "File `" + imgFileName + "' not found." );
+		IJ.log( "File `" + stack.imagePath + "' not found." );
 		return;
 	}
-	imp = openImage ( imgFileName );
+	imp = openImage ( stack.imagePath );
 	if ( imp == null )
 	{
-		IJ.log( "File `" + imgFileName + "' could not be opened." );
+		IJ.log( "File `" + stack.imagePath + "' could not be opened." );
 		return;
 	}
 	createTiles( job, imp );
@@ -787,7 +787,7 @@ void work( pool ) {
 				// create folder for the new tiles
 				imgDir.mkdirs();
 				// tile the image
-				tileSingleImage( job, stack.imagePath );
+				tileSingleImage( job, stack );
 				job.outputDir = originalOutputDir;
 				// finally remove the image
 				imgFile.delete();
